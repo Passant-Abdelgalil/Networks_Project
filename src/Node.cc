@@ -10,14 +10,61 @@
 #include "message_m.h"
 Define_Module(Node);
 
-void Node::initialize(){
-    ack_expected = 0;
+void Node::initialize() {
+    // sender's parameters
     next_frame_to_send_seq_num = 0;
+    ack_expected = 0;
+    // receiver's parameter
     frame_expected = 0;
+    // number of buffered frames
     nbuffered = 0;
 
+    // buffers to store pointers to messages
     frames_buffer.resize(MAX_SEQ);
     timeouts_buffer.resize(MAX_SEQ);
+}
+
+void Node::handleMessage(cMessage *msg)
+{
+//    bool delet_msg = false;
+//    bool self_message = false;
+    // check if it's a self-message
+    if(msg->isSelfMessage()) {
+        // check if it's a timeout event
+        std::string msgName(msg->getName());
+        std::size_t found = msgName.find("timeout");
+        if(found != std::string::npos){
+            // get sequence number of the timed out frame
+            int frame_seq_num = std::stoi( msgName.substr(0, found));
+            handle_timeout(frame_seq_num);
+        }
+        // check if it's an enable_network_layer event
+        else if(strcmp(msg->getName(), "enable network") == 0)
+            handle_network_layer_ready();
+
+        // msg no longer needed
+        delete msg;
+    }
+    else {
+        // try to cast the message to Message_Base
+        // if failed, this message is sent by the coordinator
+        if (!dynamic_cast<Message_Base *>(msg)){
+            start_protocol(); // initialize protocol parameters
+            delete msg;
+        }
+        else {
+            if(handle_frame_arrival(dynamic_cast<Message_Base *>(msg)))
+                delete msg;
+        }
+    }
+
+    if(sender && nbuffered < MAX_SEQ)
+    {
+        cMessage *msg2 = new cMessage("enable network");
+        scheduleAt(simTime() + static_cast<simtime_t>(getParentModule()->par("PT").doubleValue()), msg2);
+    }
+//    if(delet_msg)
+//        delete msg;
 }
 
 void Node::start_protocol() {
@@ -31,94 +78,89 @@ void Node::start_protocol() {
 }
 void Node::inc(int& frame_seq_num)
 {
-    frame_seq_num = (frame_seq_num + 1) % MAX_SEQ;
+    frame_seq_num = (frame_seq_num + 1) % getParentModule()->par("WS").intValue();;
 }
 
 void Node::handle_timeout(int frame_seq_num){
-    // TODO: log "Time out event at time [.. timer off-time….. ],
-    //              at Node[id] for frame with seq_num=[..]"
-
-    // TODO implement me
     next_frame_to_send_seq_num = ack_expected;
-    for (int i = 1; i <= nbuffered; i++){
+    int size = nbuffered;
+    nbuffered = 0;
+    // re-transmit all frames in the buffer
+    for (int i = 0; i < size; i++){
         std::pair<error_code, Message_Base*> frame_info = frames_buffer[i];
         std::string payload(frame_info.second->getM_Payload());
+
         /*
          * all the messages in the sender’s window will be transmitted again as
          * usual with the normal calculations for errors and delays except for
          * the first frame that is the cause for the timeout,
          * it will be sent error free
          * */
+
         if(frame_info.second->getHeader() == frame_seq_num)
-            send_data(frame_info.second, payload, NO_ERROR);
-        else
-            send_data(frame_info.second, payload, frame_info.first);
-    }
-
-}
-
-
-void Node::handleMessage(cMessage *msg)
-{
-    // check if it's a self-message
-    if(msg->isSelfMessage()) {
-        // check if it's a timeout event
-        std::string msgName(msg->getName());
-        std::size_t found = msgName.find("timeout");
-        if(found != std::string::npos){
-            int frame_seq_num = std::stoi( msgName.substr(0, found));
-            handle_timeout(frame_seq_num);
+            send_data(payload, NO_ERROR);
+        else{
+            // remove the timeout for this frame if any
+            stop_timer(frame_info.second->getHeader());
+            send_data(payload, frame_info.first);
         }
-        // check if it's an enable_network_layer event
-        else if(strcmp(msg->getName(), "enable network") == 0)
-            handle_network_layer_ready();
-    }
-    else {
-        // try to cast the message to Message_Base
-        Message_Base *message = dynamic_cast<Message_Base *>(msg);
-
-        // if failed, this message is sent by the coordinator
-        if(!message) start_protocol(); // initialize protocol parameters
-        else handle_frame_arrival(message); //else it's a frame_arrival event
     }
 
-    if(sender && nbuffered < MAX_SEQ)
-    {
-        msg->setName("enable network");
-        scheduleAt(simTime() + static_cast<simtime_t>(getParentModule()->par("PT").doubleValue()), msg);
-    }
 }
-void Node::update_window(){
-    while(!frames_buffer.empty()){
-        if(frames_buffer.front().second)
-            return;
+
+
+void Node::update_window(int ack_num){
+
+    if(!frames_buffer.front().second) {
+        std::cout << "frame buffer first is null \n";
+        return;
+    }
+
+    // don't update the window if the received acknowledge isn't the expected one
+    if (ack_num != frames_buffer.front().second->getHeader())
+        return;
+    // advance the expected acknowledge sequence number
+    inc(ack_expected);
+
+    // shift frames within the buffer to the left
+    frames_buffer.erase(frames_buffer.begin());
+    if(nbuffered > 0) nbuffered--;
+
+    while(!frames_buffer.empty())
+    {
+        auto frame_it = frames_buffer.begin();
+        if (!frame_it->second)
+            break;
+        // if a timer is set for this frame, it's not acknowledged yet
+        if (timeouts_buffer[frame_it->second->getHeader()])
+            break;
         frames_buffer.erase(frames_buffer.begin());
-        nbuffered -= 1;
+        if(nbuffered > 0) nbuffered--;
     }
     frames_buffer.resize(MAX_SEQ);
 }
 
-void Node:: handle_frame_arrival(Message_Base *frame)
+bool Node:: handle_frame_arrival(Message_Base *frame)
 {
     switch(frame->getFrame_Type()){
         case ACK:   // this is the sender node
             stop_timer(frame->getHeader());
-
-            // TODO: CHECK WINDOW BOUNDS UPDATES
-            break;
+            update_window(frame->getHeader());
+            // return true to delete the msg as it's no londer needed
+            return true;
         case Data:  // this is the receiver node
             if (frame->getHeader() == frame_expected){
-                // TODO: error detection
-                frame->setFrame_Type(ACK);
-                send_control(frame);
-                inc(frame_expected);
+                // send either ACK or NACK
+                error_detection(frame);
             }
-            break;
+            // return false to not delete the msg, because the sender is
+            // responsible for deleting the msgs
+            return false;
         // in case of NACK, nothing should be done according to TA's post
         default:
             break;
     }
-
+    return true;
 }
 
 void Node::start_timer(int frame_seq_num)
@@ -139,7 +181,6 @@ void Node::stop_timer(int frame_seq_num)
 
 double Node::delay_frame(double time, Message_Base *msg){
     time += getParentModule()->par("ED").doubleValue();
-    sendDelayed(msg, time, "out_port");
     return time;
 }
 double Node::duplicate_frame(double time, Message_Base *msg){
@@ -154,50 +195,55 @@ std::string Node::modify_frame(double time, Message_Base *msg){
     int bit_index =  intuniform(0,static_cast<int>(payload.length())-1, 0);
     payload[bit_index] = '1' - payload[bit_index];
     msg->setM_Payload(payload.c_str());
-    sendDelayed(msg, time, "out_port");
     return payload;
 }
 
-void Node::send_data(Message_Base* msg, std::string payload, error_code error)
+void Node::send_data(std::string payload, error_code error)
 {
+    // set message name according to frame sequence number
     std::string message_name = "message " + std::to_string(next_frame_to_send_seq_num);
-    msg->setName(message_name.c_str());
+    Message_Base* msg = new Message_Base(message_name.c_str());
 
+    // set sequence number
     msg->setHeader(next_frame_to_send_seq_num);
+
+    // apply framing algorithm
     std::string framed_payload = frame_packet(payload);
+    // update the frame payload
     msg->setM_Payload(framed_payload.c_str());
+
+    // set frame type to data
     msg->setFrame_Type(Data);
+
+    // apply error detection algorithm and fill corresponding data
     error_detection(msg);
 
-// ========= TO BE REVISITED ============
+    // The ACK/NACK number are set as the sequence number of the next expected frame
     int ack_num = (frame_expected + MAX_SEQ) % (MAX_SEQ + 1);
     msg->setAck_Num(ack_num);
-    msg->setTrailer('0');
-// ======================================
 
-    double delayTime = getParentModule()->par("PT").doubleValue();
-
-    /* TODO:
-     log "At time [.. starting sending time after processing….. ], Node[id]
-     [sent/received] frame with seq_num=[..] and
-     payload=[ ….. in characters after modification….. ] and
-     trailer=[…….in bits….. ] , Modified [-1 for no modification,
-     otherwise the modified bit number],Lost [Yes/No],
-     Duplicate [0 for none, 1 for the first version, 2 for the second version]
-     , Delay [0 for no delay , otherwise the error delay interval].""
-    */
+    // set delayTime to transmission  delay parameter
+    double delayTime = getParentModule()->par("TD").doubleValue();
 
     // store message to the buffer
     frames_buffer[nbuffered] = {error, msg};
+
     // apply errors on message according to error code
     apply_error(error, delayTime, msg);
+
     // start timer for that particular frame
     start_timer(next_frame_to_send_seq_num);
+
+    //expand the sender's window
+    nbuffered = nbuffered + 1;
+
+    inc(next_frame_to_send_seq_num);
 }
 
 void Node:: apply_error(error_code error, double delayTime, Message_Base *msg){
     bool lose_frame = false;
     std::string modified_frame;
+    double loss_prob = getParentModule()->par("LP").doubleValue();
 
     switch(error)
     {
@@ -206,34 +252,40 @@ void Node:: apply_error(error_code error, double delayTime, Message_Base *msg){
         sendDelayed(msg, delayTime, "out_port");
         break;
     case DUP:
-        delayTime = duplicate_frame(delayTime, msg);
+        duplicate_frame(delayTime, msg);
         break;
     case DELAY:
-        delayTime =  delay_frame(delayTime, msg);
+        delayTime = delay_frame(delayTime, msg);
+        sendDelayed(msg, delayTime, "out_port");
         break;
     case DUP_DELAY:
-        delayTime =  delay_frame(delayTime, msg);
+        delayTime = delay_frame(delayTime, msg);
+        sendDelayed(msg, delayTime, "out_port");
         duplicate_frame(delayTime, msg);
         break;
     case LOSS:
-        lose_frame = static_cast<bool>(bernoulli(getParentModule()->par("LP").doubleValue(), 1));
+        lose_frame = static_cast<bool>(bernoulli(loss_prob, 0));
         if (!lose_frame)
             sendDelayed(msg, delayTime, "out_port");
         break;
     case MOD:
         modify_frame(delayTime, msg);
+        sendDelayed(msg, delayTime, "out_port");
         break;
     case MOD_DELAY:
-        modified_frame = modify_frame(delayTime, msg);
-        delay_frame(delayTime, msg);
+        modify_frame(delayTime, msg);
+        delayTime =  delay_frame(delayTime, msg);
+        sendDelayed(msg, delayTime, "out_port");
         break;
     case MOD_DUP:
         modify_frame(delayTime, msg);
+        sendDelayed(msg, delayTime, "out_port");
         duplicate_frame(delayTime, msg);
         break;
     case MOD_DUP_DELAY:
         modify_frame(delayTime, msg);
         delayTime = delay_frame(delayTime, msg);
+        sendDelayed(msg, delayTime, "out_port");
         duplicate_frame(delayTime, msg);
         break;
     default:
@@ -241,30 +293,22 @@ void Node:: apply_error(error_code error, double delayTime, Message_Base *msg){
     }
 }
 
-void Node::handle_network_layer_ready(){
+void Node::handle_network_layer_ready() {
     // read from the input file the next message to send
     std::pair<error_code, std::string> message_info = get_next_message();
-    std::string next_message = message_info.second;
+    std::string payload = message_info.second;
     error_code error = message_info.first;
 
-    Message_Base *message = new Message_Base();
     // send the data
-    send_data(message, next_message, error);
-    //expand the sender's window
-    nbuffered = nbuffered + 1;
-
-    inc(next_frame_to_send_seq_num);
+    if(nbuffered < MAX_SEQ)
+        send_data(payload, error);
 }
 
 
-// TODOs
 
 std::pair<error_code, std::string> Node::get_next_message(){
     // TODO: Implement File Parser read function
-    // TODO:  log "At time [.. starting processing time….. ],
-    //              Node[id] , Introducing channel error with code
-    //              =[ …code in 4 bits… ]."
-return  {NO_ERROR, "Hello"};
+    return  {NO_ERROR, "Hello"};
 }
 
 std::string Node::frame_packet(std::string payload)
@@ -275,12 +319,19 @@ std::string Node::frame_packet(std::string payload)
 
 void Node::error_detection(Message_Base *msg)
 {
+
     // TODO: Implement Framing Logic
     if(sender){
-
+        msg->setTrailer('0');
     }
     else{
-
+        std::string message_name = "ack frame " + std::to_string(frame_expected);
+        Message_Base *control_msg = new Message_Base(message_name.c_str());
+        control_msg->setFrame_Type(ACK);
+        control_msg->setHeader(frame_expected);
+        inc(frame_expected);
+        control_msg->setAck_Num(frame_expected);
+        send_control(control_msg);
     }
 }
 void Node::send_control(Message_Base *msg){
@@ -295,9 +346,11 @@ void Node::send_control(Message_Base *msg){
     bool lose_frame = static_cast<bool>(bernoulli(getParentModule()->par("LP").doubleValue(), 0));
     if (lose_frame)
         delete msg;
-    else{
+    else {
         // send the message after the computed delay interval
         double delayTime = getParentModule()->par("PT").doubleValue();
+        // increase the delay by the transmission delay
+        delayTime += getParentModule()->par("PT").doubleValue();
         sendDelayed(msg, delayTime, "out_port");
     }
 }

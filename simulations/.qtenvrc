@@ -1,3 +1,19 @@
+[Inspector-0]
+classname=omnetpp::cMessage
+fullscreen=false
+geom=@Rect(93 279 637 383)
+id=@Variant(\0\0\0\x81\0\0\0\0\0\0\0\x15)
+object=simulation.scheduled-events.enable network
+type=1
+
+[Inspector-1]
+classname=omnetpp::cMessage
+fullscreen=false
+geom=@Rect(639 481 637 383)
+id=@Variant(\0\0\0\x81\0\0\0\0\0\0\0\x19)
+object=simulation.scheduled-events.enable network
+type=1
+
 [RunModeProfiles]
 fast-max-animation-speed=nan
 fast-max-playback-speed=1e+06

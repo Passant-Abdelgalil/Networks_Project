@@ -8,6 +8,8 @@
 #ifndef NODE_H_
 #define NODE_H_
 #include <omnetpp.h>
+#include <algorithm>
+#include <vector>
 #include "message_m.h"
 
 using namespace omnetpp;
@@ -30,16 +32,17 @@ class Node : public cSimpleModule {
 public:
     std::pair<error_code, std::string> get_next_message();
     void start_protocol();
-    void handle_frame_arrival(Message_Base *frame);
+    bool handle_frame_arrival(Message_Base *frame);
     void handle_network_layer_ready();
     void handle_checksum_err(cMessage *frame);
     void handle_timeout(int frame_seq);
-    void send_data(Message_Base *msg, std::string payload, error_code error);
+    void send_data(std::string payload, error_code error);
     void send_control(Message_Base *msg);
     void start_timer(int frame_seq_num);
     void stop_timer(int frame_seq_num);
     void inc(int& frame_seq_num);
-    void update_window();
+    void update_window(int ack_num);
+    void acknowledge_frame(int ack_num);
 
     void apply_error(error_code error, double time, Message_Base *msg);
     double delay_frame(double time, Message_Base *msg);
