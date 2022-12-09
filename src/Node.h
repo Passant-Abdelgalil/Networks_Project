@@ -7,8 +7,8 @@
 
 #ifndef NODE_H_
 #define NODE_H_
-
-#include "Protocol.h"
+#include <omnetpp.h>
+#include "message_m.h"
 
 using namespace omnetpp;
 
@@ -39,6 +39,7 @@ public:
     void start_timer(int frame_seq_num);
     void stop_timer(int frame_seq_num);
     void inc(int& frame_seq_num);
+    void update_window();
 
     void apply_error(error_code error, double time, Message_Base *msg);
     double delay_frame(double time, Message_Base *msg);

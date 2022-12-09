@@ -24,7 +24,7 @@ void Node::start_protocol() {
     // so initialize this node as the sender
     sender = true;
     // set the WS for this sender protocol instance
-    MAX_SEQ = par("WS").intValue();
+    MAX_SEQ = getParentModule()->par("WS").intValue();
 
     frames_buffer.resize(MAX_SEQ);
     timeouts_buffer.resize(MAX_SEQ);
@@ -85,8 +85,17 @@ void Node::handleMessage(cMessage *msg)
     if(sender && nbuffered < MAX_SEQ)
     {
         msg->setName("enable network");
-        scheduleAt(simTime() + static_cast<simtime_t>(par("PT").doubleValue()), msg);
+        scheduleAt(simTime() + static_cast<simtime_t>(getParentModule()->par("PT").doubleValue()), msg);
     }
+}
+void Node::update_window(){
+    while(!frames_buffer.empty()){
+        if(frames_buffer.front().second)
+            return;
+        frames_buffer.erase(frames_buffer.begin());
+        nbuffered -= 1;
+    }
+    frames_buffer.resize(MAX_SEQ);
 }
 
 void Node:: handle_frame_arrival(Message_Base *frame)
@@ -94,6 +103,7 @@ void Node:: handle_frame_arrival(Message_Base *frame)
     switch(frame->getFrame_Type()){
         case ACK:   // this is the sender node
             stop_timer(frame->getHeader());
+
             // TODO: CHECK WINDOW BOUNDS UPDATES
             break;
         case Data:  // this is the receiver node
@@ -119,7 +129,7 @@ void Node::start_timer(int frame_seq_num)
     // store the timer msg pointer to access later in case of stop_timer
     timeouts_buffer[frame_seq_num] = timeout_message;
     // set the timer value according to TO parameter
-    scheduleAt(simTime()+static_cast<simtime_t>(par("TO").doubleValue()), timeout_message);
+    scheduleAt(simTime()+static_cast<simtime_t>(getParentModule()->par("TO").doubleValue()), timeout_message);
 }
 
 void Node::stop_timer(int frame_seq_num)
@@ -128,13 +138,13 @@ void Node::stop_timer(int frame_seq_num)
 }
 
 double Node::delay_frame(double time, Message_Base *msg){
-    time += par("ED").doubleValue();
+    time += getParentModule()->par("ED").doubleValue();
     sendDelayed(msg, time, "out_port");
     return time;
 }
 double Node::duplicate_frame(double time, Message_Base *msg){
     Message_Base *dup_msg = msg->dup();
-    time += par("DD").doubleValue();
+    time += getParentModule()->par("DD").doubleValue();
     sendDelayed(dup_msg, time, "out_port");
     return time;
 }
@@ -165,7 +175,7 @@ void Node::send_data(Message_Base* msg, std::string payload, error_code error)
     msg->setTrailer('0');
 // ======================================
 
-    double delayTime = par("PT").doubleValue();
+    double delayTime = getParentModule()->par("PT").doubleValue();
 
     /* TODO:
      log "At time [.. starting sending time after processing….. ], Node[id]
@@ -206,7 +216,7 @@ void Node:: apply_error(error_code error, double delayTime, Message_Base *msg){
         duplicate_frame(delayTime, msg);
         break;
     case LOSS:
-        lose_frame = static_cast<bool>(bernoulli(par("LP").doubleValue(), 1));
+        lose_frame = static_cast<bool>(bernoulli(getParentModule()->par("LP").doubleValue(), 1));
         if (!lose_frame)
             sendDelayed(msg, delayTime, "out_port");
         break;
@@ -282,12 +292,12 @@ void Node::send_control(Message_Base *msg){
      * */
 
     // Lose the frame with probability LP
-    bool lose_frame = static_cast<bool>(bernoulli(par("LP").doubleValue(), 0));
+    bool lose_frame = static_cast<bool>(bernoulli(getParentModule()->par("LP").doubleValue(), 0));
     if (lose_frame)
         delete msg;
     else{
         // send the message after the computed delay interval
-        double delayTime = par("PT").doubleValue();
+        double delayTime = getParentModule()->par("PT").doubleValue();
         sendDelayed(msg, delayTime, "out_port");
     }
 }

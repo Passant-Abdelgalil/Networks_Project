@@ -14,14 +14,12 @@ network Project_Network
  	       double LP = default(0.1);	// ACK/NACK frame loss probability
  	
  	submodules:
- 		// TODO: add coordinator submodule
- 		// coordinator: Coordinator
+ 		coordinator: Coordinator;
  	    node0: Node;
  	    node1: Node;
  	connections:
- 	    // TODO: add coordinator connections with nodes
- 	    // node0.in_ports[0] <-- coordinator 
- 	   	// node1.in_ports[0] <-- coordinator 
+ 	     node0.in_ports[0] <-- coordinator.out_ports[0];
+ 	   	 node1.in_ports[0] <-- coordinator.out_ports[1];
  	   	
  		node0.in_ports[1] <-- node1.out_port;
  		node1.in_ports[1] <-- node0.out_port;
