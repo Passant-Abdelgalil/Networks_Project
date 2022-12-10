@@ -18,6 +18,8 @@ void Node::initialize() {
     frame_expected = 0;
     // number of buffered frames
     nbuffered = 0;
+    // enable network layer
+    network_layer_enabled = true;
 
     // buffers to store pointers to messages
     frames_buffer.resize(MAX_SEQ);
@@ -26,45 +28,37 @@ void Node::initialize() {
 
 void Node::handleMessage(cMessage *msg)
 {
-//    bool delet_msg = false;
-//    bool self_message = false;
-    // check if it's a self-message
-    if(msg->isSelfMessage()) {
-        // check if it's a timeout event
-        std::string msgName(msg->getName());
-        std::size_t found = msgName.find("timeout");
-        if(found != std::string::npos){
-            // get sequence number of the timed out frame
-            int frame_seq_num = std::stoi( msgName.substr(0, found));
-            handle_timeout(frame_seq_num);
-        }
-        // check if it's an enable_network_layer event
-        else if(strcmp(msg->getName(), "enable network") == 0)
+    // check if this message is from the coordinator
+    if(msg->arrivedOn("in_ports", 0)) {
+        start_protocol();
+        delete msg;
+        cMessage * self_msg = new cMessage("enable network");
+        scheduleAt(simTime() + static_cast<simtime_t>(getParentModule()->par("PT").doubleValue()), self_msg);
+    }
+    else if(strcmp(msg->getName(), "enable network") == 0) {
+        if(network_layer_enabled)
             handle_network_layer_ready();
+        delete msg;
+        if(!end_communication){
+            cMessage * self_msg = new cMessage("enable network");
+            scheduleAt(simTime() + static_cast<simtime_t>(getParentModule()->par("PT").doubleValue()), self_msg);
+        }
+    }
+    else if(msg->isSelfMessage()&& msg->hasPar("frame_seq")) { // timeout event
+        // get sequence number of the timed out frame
+        int frame_seq_num = msg->par("frame_seq");
+        handle_timeout(frame_seq_num);
 
-        // msg no longer needed
         delete msg;
     }
-    else {
-        // try to cast the message to Message_Base
-        // if failed, this message is sent by the coordinator
-        if (!dynamic_cast<Message_Base *>(msg)){
-            start_protocol(); // initialize protocol parameters
-            delete msg;
-        }
-        else {
-            if(handle_frame_arrival(dynamic_cast<Message_Base *>(msg)))
-                delete msg;
-        }
-    }
+    else  // frame_arrival event
+        handle_frame_arrival(dynamic_cast<Message_Base *>(msg));
 
     if(sender && nbuffered < MAX_SEQ)
-    {
-        cMessage *msg2 = new cMessage("enable network");
-        scheduleAt(simTime() + static_cast<simtime_t>(getParentModule()->par("PT").doubleValue()), msg2);
-    }
-//    if(delet_msg)
-//        delete msg;
+        network_layer_enabled = true;
+    else
+        network_layer_enabled = false;
+
 }
 
 void Node::start_protocol() {
@@ -99,7 +93,7 @@ void Node::handle_timeout(int frame_seq_num){
 
         if(frame_info.second->getHeader() == frame_seq_num)
             send_data(payload, NO_ERROR);
-        else{
+        else {
             // remove the timeout for this frame if any
             stop_timer(frame_info.second->getHeader());
             send_data(payload, frame_info.first);
@@ -111,22 +105,18 @@ void Node::handle_timeout(int frame_seq_num){
 
 void Node::update_window(int ack_num){
 
-    if(!frames_buffer.front().second) {
-        std::cout << "frame buffer first is null \n";
-        return;
-    }
-
     // don't update the window if the received acknowledge isn't the expected one
     if (ack_num != frames_buffer.front().second->getHeader())
         return;
+
     // advance the expected acknowledge sequence number
     inc(ack_expected);
 
     // shift frames within the buffer to the left
     frames_buffer.erase(frames_buffer.begin());
-    if(nbuffered > 0) nbuffered--;
+    nbuffered--;
 
-    while(!frames_buffer.empty())
+    while(!frames_buffer.empty() && nbuffered > 0)
     {
         auto frame_it = frames_buffer.begin();
         if (!frame_it->second)
@@ -135,47 +125,48 @@ void Node::update_window(int ack_num){
         if (timeouts_buffer[frame_it->second->getHeader()])
             break;
         frames_buffer.erase(frames_buffer.begin());
-        if(nbuffered > 0) nbuffered--;
+        nbuffered--;
     }
     frames_buffer.resize(MAX_SEQ);
 }
 
-bool Node:: handle_frame_arrival(Message_Base *frame)
+void Node:: handle_frame_arrival(Message_Base *frame)
 {
     switch(frame->getFrame_Type()){
         case ACK:   // this is the sender node
             stop_timer(frame->getHeader());
             update_window(frame->getHeader());
-            // return true to delete the msg as it's no londer needed
-            return true;
+            delete frame;
+            break;
         case Data:  // this is the receiver node
             if (frame->getHeader() == frame_expected){
                 // send either ACK or NACK
                 error_detection(frame);
             }
-            // return false to not delete the msg, because the sender is
-            // responsible for deleting the msgs
-            return false;
+            // don't delete the msg, because the sender is
+            // responsible for deleting msgs
+            break;
         // in case of NACK, nothing should be done according to TA's post
         default:
             break;
     }
-    return true;
 }
 
 void Node::start_timer(int frame_seq_num)
 {
     // start new timer for this message
-    std::string message_content = std::to_string(frame_seq_num) + "timeout";
-    cMessage* timeout_message = new cMessage(message_content.c_str());
-    // store the timer msg pointer to access later in case of stop_timer
-    timeouts_buffer[frame_seq_num] = timeout_message;
+    cMessage* timeout_message = new cMessage("timeout");
+    timeout_message->addPar("frame_seq");
+    timeout_message->par("frame_seq").setLongValue(frame_seq_num);
     // set the timer value according to TO parameter
     scheduleAt(simTime()+static_cast<simtime_t>(getParentModule()->par("TO").doubleValue()), timeout_message);
+    // store the timer msg pointer to access later in case of stop_timer
+    timeouts_buffer[frame_seq_num] = timeout_message;
 }
 
 void Node::stop_timer(int frame_seq_num)
 {
+    EV << "stopping timer for " << std::to_string(frame_seq_num);
     cancelAndDelete(timeouts_buffer[frame_seq_num]);
 }
 
@@ -350,7 +341,7 @@ void Node::send_control(Message_Base *msg){
         // send the message after the computed delay interval
         double delayTime = getParentModule()->par("PT").doubleValue();
         // increase the delay by the transmission delay
-        delayTime += getParentModule()->par("PT").doubleValue();
+        delayTime += getParentModule()->par("TD").doubleValue();
         sendDelayed(msg, delayTime, "out_port");
     }
 }

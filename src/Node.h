@@ -32,7 +32,7 @@ class Node : public cSimpleModule {
 public:
     std::pair<error_code, std::string> get_next_message();
     void start_protocol();
-    bool handle_frame_arrival(Message_Base *frame);
+    void handle_frame_arrival(Message_Base *frame);
     void handle_network_layer_ready();
     void handle_checksum_err(cMessage *frame);
     void handle_timeout(int frame_seq);
@@ -57,6 +57,8 @@ public:
     bool sender = false;    // flag to act upon, by default it's false
                             // set to true when the coordinator activate the node
 
+    bool end_communication = false;
+    bool network_layer_enabled;
     virtual void initialize();
     virtual void handleMessage(cMessage *msg);
 
@@ -66,6 +68,7 @@ public:
     int ack_expected;
     int frame_expected;
     int nbuffered = 0;
+
 
     std::vector<std::pair<error_code,Message_Base *> > frames_buffer;
     std::vector<cMessage *> timeouts_buffer;
