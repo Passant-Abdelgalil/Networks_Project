@@ -115,6 +115,7 @@ void Node::update_window(int ack_num){
     // shift frames within the buffer to the left
     frames_buffer.erase(frames_buffer.begin());
     nbuffered--;
+    EV << "\nnbuffered is: " << nbuffered;
 
     while(!frames_buffer.empty() && nbuffered > 0)
     {
@@ -126,6 +127,7 @@ void Node::update_window(int ack_num){
             break;
         frames_buffer.erase(frames_buffer.begin());
         nbuffered--;
+        EV << "\nnbuffered is: " << nbuffered;
     }
     frames_buffer.resize(MAX_SEQ);
 }
@@ -168,6 +170,7 @@ void Node::stop_timer(int frame_seq_num)
 {
     EV << "stopping timer for " << std::to_string(frame_seq_num);
     cancelAndDelete(timeouts_buffer[frame_seq_num]);
+    timeouts_buffer[frame_seq_num] = nullptr;
 }
 
 double Node::delay_frame(double time, Message_Base *msg){
@@ -227,6 +230,8 @@ void Node::send_data(std::string payload, error_code error)
 
     //expand the sender's window
     nbuffered = nbuffered + 1;
+    EV << "\nsend_data, nbuffered is: " << nbuffered;
+
 
     inc(next_frame_to_send_seq_num);
 }
