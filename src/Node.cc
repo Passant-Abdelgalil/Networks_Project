@@ -92,7 +92,7 @@ void Node::handle_timeout(int frame_seq_num){
          * */
 
         if(frame_info.second->getHeader() == frame_seq_num)
-            send_data(payload, NO_ERROR);
+            send_data(payload, NO_ERRORs);
         else {
             // remove the timeout for this frame if any
             stop_timer(frame_info.second->getHeader());
@@ -243,7 +243,7 @@ void Node:: apply_error(error_code error, double delayTime, Message_Base *msg){
 
     switch(error)
     {
-    case NO_ERROR:
+    case NO_ERRORs:
         // send the message after the processing delay time only
         sendDelayed(msg, delayTime, "out_port");
         break;
@@ -304,7 +304,7 @@ void Node::handle_network_layer_ready() {
 
 std::pair<error_code, std::string> Node::get_next_message(){
     // TODO: Implement File Parser read function
-    return  {NO_ERROR, "Hello"};
+    return  {NO_ERRORs, "Hello"};
 }
 
 std::string Node::frame_packet(std::string payload)

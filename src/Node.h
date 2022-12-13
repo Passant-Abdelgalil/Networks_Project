@@ -15,7 +15,7 @@
 using namespace omnetpp;
 
 enum error_code {
-    NO_ERROR,           // 0000
+    NO_ERRORs,           // 0000
     DELAY,              // 0001
     DUP,                // 0010
     DUP_DELAY,          // 0011

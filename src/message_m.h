@@ -77,19 +77,25 @@ class Message_Base : public ::omnetpp::cPacket
   private:
     void copy(const Message_Base& other);
 
-  protected:
+  public:
     // protected and unimplemented operator==(), to prevent accidental usage
     bool operator==(const Message_Base&);
     // make constructors protected to avoid instantiation
+    Message_Base(const char *name=nullptr, short kind=0);
     Message_Base(const Message_Base& other);
     // make assignment operator protected to force the user override it
     Message_Base& operator=(const Message_Base& other);
 
   public:
-    Message_Base(const char *name=nullptr, short kind=0);
     virtual ~Message_Base();
     virtual Message_Base *dup() const override {
-        return new Message_Base(*this);
+        Message_Base* msgDuplicate = new Message_Base();
+        msgDuplicate->Header = this->getHeader();
+        msgDuplicate->Trailer = this->Trailer;
+        msgDuplicate->Ack_Num = this->Ack_Num;
+        msgDuplicate->Frame_Type = this->Frame_Type;
+        msgDuplicate->M_Payload = this->M_Payload;
+        return msgDuplicate;
     }
     virtual void parsimPack(omnetpp::cCommBuffer *b) const override;
     virtual void parsimUnpack(omnetpp::cCommBuffer *b) override;
