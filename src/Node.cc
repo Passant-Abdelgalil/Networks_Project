@@ -339,11 +339,16 @@ std::pair<error_code, std::string> Node::get_next_message(){
         line++;
     }
 
-    //    if(error == "1010 "){
-//        EV << "From Node Line = " <<line <<endl;
-//        EV << "From Node Error = " <<error;
-//        EV << "From Node Error = " <<error.size() << endl;
-//    }
+//    EV << "From Node Line = " <<line <<endl;
+//    EV << "From Node Error = " <<error;
+//    EV << "From Node Error = " <<error.size() << endl;
+
+    if(numOfLines == line){
+        end_communication = true;
+        EV << "From Node Line = " <<line <<endl;
+        EV << "From Node Error = " <<error;
+        EV << "From Node Error = " <<error.size() << endl;
+    }
 
     if(error == "0000 ")
         return  {NO_ERRORs, message};
@@ -384,7 +389,23 @@ std::pair<error_code, std::string> Node::get_next_message(){
 std::string Node::frame_packet(std::string payload)
 {
     // TODO: Implement Framing Logic
-    return payload;
+
+//    EV << "From Packet Payload = " << payload;
+
+    // Framing
+    std::string frame = "";
+    frame += '$';
+    for(int i = 0; i < payload.size() - 1; i++){
+        if(payload[i] == '$' || payload[i] == '/')
+            frame+='/';
+
+        frame += payload[i];
+    }
+    frame+='$';
+
+//    EV << "From Packet frame = " << frame;
+
+    return frame;
 }
 
 void Node::error_detection(Message_Base *msg)
@@ -392,12 +413,40 @@ void Node::error_detection(Message_Base *msg)
 
     // TODO: Implement Framing Logic
     if(sender){
-        msg->setTrailer('0');
+//       EV << "From Error detection = " << msg->M_Payload;
+        std::bitset<8> parityByte(0);
+
+//        EV << "From Error detection = " << msg->M_Payload.size() << endl;
+
+        for(int i = 0; i < msg->M_Payload.size(); i++)
+            parityByte ^= std::bitset<8>( msg->M_Payload.c_str()[i]);
+
+        EV << "From Error detection Sender parityByte = " << char(parityByte.to_ulong()) <<endl;
+        msg->setTrailer(parityByte.to_ulong());
     }
     else{
+
+        EV << "From Error detection Receiver = " << msg->M_Payload<<endl;
+//        EV << "From Error detection Receiver = " << msg->getTrailer()<<endl;
+        std::bitset<8> parityByte(0);
+        for(int i = 0; i < msg->M_Payload.size(); i++)
+                    parityByte ^= std::bitset<8>( msg->M_Payload.c_str()[i]);
+//        EV << "From Error detection Receiver parityByte = " << char(parityByte.to_ulong()) <<endl;
+
+//           if(parityByte.to_ulong() == msg->getTrailer())
+//               EV << "From Error detection Receiver parityByte Condition= " << true <<endl;
+//           else
+//               EV << "From Error detection Receiver parityByte Condition= " << false <<endl;
+
         std::string message_name = "ack frame " + std::to_string(frame_expected);
         Message_Base *control_msg = new Message_Base(message_name.c_str());
-        control_msg->setFrame_Type(ACK);
+
+
+        if(parityByte.to_ulong() == msg->getTrailer())
+            control_msg->setFrame_Type(ACK);
+        else
+            control_msg->setFrame_Type(NACK);
+
         control_msg->setHeader(frame_expected);
         inc(frame_expected);
         control_msg->setAck_Num(frame_expected);
@@ -462,6 +511,7 @@ void Node::readInputFile(){
             messages.push_back(message);
             errors.push_back(error);
             k++;
+
 
 //            EV << "Error From Node Base = " << typeid(error).name() << endl;
 //            EV << "Message From Node  = " << message << endl;

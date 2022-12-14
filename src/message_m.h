@@ -69,7 +69,6 @@ class Message_Base : public ::omnetpp::cPacket
 {
   protected:
     int Header;
-
     Byte Trailer;
     Msg_Type Frame_Type;
     int Ack_Num;

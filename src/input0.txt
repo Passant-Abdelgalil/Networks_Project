@@ -1,5 +1,5 @@
-1010 We can also use std::strtok to split String by space in C++. std:strtok returns next token. We need to call this in loop to get all the tokens. It will return null when there are no more tokens left in the String.
-0000 two 2 two
+1000 Ahmed$Ayman/Ahmed$$Ibrahim//
+1000 two 2 two
 0100 three 3 three
 0000 four 4 four
 0001 five 5 five
