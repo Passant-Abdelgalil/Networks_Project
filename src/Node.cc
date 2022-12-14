@@ -8,6 +8,14 @@
 
 #include "Node.h"
 #include "message_m.h"
+
+#include <iostream>
+#include <string>
+#include <vector>
+#include <sstream>
+
+#include<fstream>
+
 Define_Module(Node);
 
 void Node::initialize() {
@@ -30,12 +38,25 @@ void Node::handleMessage(cMessage *msg)
 {
     // check if this message is from the coordinator
     if(msg->arrivedOn("in_ports", 0)) {
+
+        EV << "Node Id From Node = " << msg->par(msg->findPar("nodeId")).longValue() << endl;
+//        EV << "Starting Time From Node = " << msg->par(msg->findPar("startTime")).longValue() << endl;
+//        EV << "simTime Time From Node = " << simTime() << endl;
+
+        nodeId = msg->par(msg->findPar("nodeId")).longValue();
+        long startTime = msg->par(msg->findPar("startTime")).longValue();
+
         start_protocol();
         delete msg;
         cMessage * self_msg = new cMessage("enable network");
-        scheduleAt(simTime() + static_cast<simtime_t>(getParentModule()->par("PT").doubleValue()), self_msg);
+        scheduleAt(simTime() + static_cast<simtime_t>(getParentModule()->par("PT").doubleValue()) + static_cast<simtime_t>(startTime), self_msg);
     }
     else if(strcmp(msg->getName(), "enable network") == 0) {
+        if(initialState){
+            readInputFile();
+            initialState = false;
+        }
+
         if(network_layer_enabled)
             handle_network_layer_ready();
         delete msg;
@@ -276,6 +297,7 @@ void Node:: apply_error(error_code error, double delayTime, Message_Base *msg){
     case MOD_DUP:
         modify_frame(delayTime, msg);
         sendDelayed(msg, delayTime, "out_port");
+//        EV << "From Node Before Sending Message " << msg->M_Payload <<endl;
         duplicate_frame(delayTime, msg);
         break;
     case MOD_DUP_DELAY:
@@ -304,7 +326,59 @@ void Node::handle_network_layer_ready() {
 
 std::pair<error_code, std::string> Node::get_next_message(){
     // TODO: Implement File Parser read function
-    return  {NO_ERRORs, "Hello"};
+
+//    EV << "From Node Messages = " << messages[line]<< endl;
+//    EV << "From Node Messages = " << errors[line]<< endl;
+
+    std::string error = "";
+    std::string message = "";
+
+    if(line < numOfLines){
+        error = errors[line];
+        message = messages[line];
+        line++;
+    }
+
+    //    if(error == "1010 "){
+//        EV << "From Node Line = " <<line <<endl;
+//        EV << "From Node Error = " <<error;
+//        EV << "From Node Error = " <<error.size() << endl;
+//    }
+
+    if(error == "0000 ")
+        return  {NO_ERRORs, message};
+    else if(error == "0001 ")
+        return  {DELAY, message};
+    else if(error == "0010 ")
+        return  {DUP, message};
+    else if(error == "0011 ")
+        return  {DUP_DELAY, message};
+    else if(error == "0100 ")
+        return  {LOSS, message};
+    else if(error == "0101 ")
+        return  {LOSS, message};
+    else if(error== "0110 ")
+        return  {LOSS_BOTH, message};
+    else if(error == "0111 ")
+        return  {LOSS_BOTH, message};
+    else if(error == "1000 ")
+        return  {MOD, message};
+    else if(error == "1001 ")
+        return  {MOD_DELAY, message};
+    else if(error == "1010 ")
+        return  {MOD_DUP, message};
+    else if(error == "1011 ")
+        return  {MOD_DUP_DELAY, message};
+    else if(error == "1100 ")
+        return  {LOSS, message};
+    else if(error == "1101 ")
+        return  {LOSS, message};
+    else if(error == "1110 ")
+        return  {LOSS_BOTH, message};
+    else if(error == "1111 ")
+        return  {LOSS_BOTH, message};
+
+    return  {NO_ERRORs,"Hello"};
 }
 
 std::string Node::frame_packet(std::string payload)
@@ -349,4 +423,54 @@ void Node::send_control(Message_Base *msg){
         delayTime += getParentModule()->par("TD").doubleValue();
         sendDelayed(msg, delayTime, "out_port");
     }
+}
+
+void Node::tokenize(std::string const &str, const char delim,
+            std::vector<std::string> &out)
+{
+    // construct a stream from the string
+    std::stringstream ss(str);
+
+    std::string s;
+    while (std::getline(ss, s, delim)) {
+        out.push_back(s + " ");
+    }
+}
+
+void Node::readInputFile(){
+    std::string line;
+    std::ifstream filestream("C:\\Users\\CMP\\OneDrive\\Documents\\GitHub\\Networks_Project\\src\\input0.txt");
+    EV << " File is open = " << filestream.is_open() <<endl;
+
+    if(filestream.is_open()) {
+
+        const char delim = ' ';
+        int k = 0;
+
+        while (getline(filestream, line)) {
+
+            std::string error = "";
+            std::string message = "";
+            std::vector<std::string> result;
+
+            tokenize(line, delim, result);
+
+            error = result[0];
+            for (int i = 1; i < result.size(); i++)
+                    message += result[i];
+
+            messages.push_back(message);
+            errors.push_back(error);
+            k++;
+
+//            EV << "Error From Node Base = " << typeid(error).name() << endl;
+//            EV << "Message From Node  = " << message << endl;
+
+
+        }
+
+        numOfLines = k;
+        filestream.close();
+    }
+
 }

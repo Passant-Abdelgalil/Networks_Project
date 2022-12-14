@@ -53,9 +53,18 @@ public:
     std::string frame_packet(std::string payload);
     void error_detection(Message_Base *msg);
 
+    void tokenize(std::string const &str, const char delim,
+            std::vector<std::string> &out);
+
+    void readInputFile();
+
     protected:
     bool sender = false;    // flag to act upon, by default it's false
                             // set to true when the coordinator activate the node
+
+    std::vector<std::string> messages;
+    std::vector<std::string> errors;
+    bool initialState = true;
 
     bool end_communication = false;
     bool network_layer_enabled;
@@ -68,8 +77,9 @@ public:
     int ack_expected;
     int frame_expected;
     int nbuffered = 0;
-
-
+    int line = 0;
+    int nodeId;
+    int numOfLines;
     std::vector<std::pair<error_code,Message_Base *> > frames_buffer;
     std::vector<cMessage *> timeouts_buffer;
 };

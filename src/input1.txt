@@ -1,0 +1,7 @@
+1010 one
+0000 two
+0100 three
+0000 four
+0001 five
+0100 six
+0000 seven
