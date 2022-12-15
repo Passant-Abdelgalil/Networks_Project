@@ -72,7 +72,7 @@ void Node::start_protocol() {
 }
 void Node::inc(int& frame_seq_num)
 {
-    frame_seq_num = (frame_seq_num + 1) % getParentModule()->par("WS").intValue();;
+    frame_seq_num = (frame_seq_num + 1) % (getParentModule()->par("WS").intValue()+1);
 }
 
 void Node::handle_timeout(int frame_seq_num){
@@ -103,42 +103,45 @@ void Node::handle_timeout(int frame_seq_num){
 }
 
 
-void Node::update_window(int ack_num){
+void Node::update_window(int ack_num) {
 
-    // don't update the window if the received acknowledge isn't the expected one
-    if (ack_num != frames_buffer.front().second->getHeader())
-        return;
+    int index = -1;
 
-    // advance the expected acknowledge sequence number
-    inc(ack_expected);
-
-    // shift frames within the buffer to the left
-    frames_buffer.erase(frames_buffer.begin());
-    nbuffered--;
-    EV << "\nnbuffered is: " << nbuffered;
-
-    while(!frames_buffer.empty() && nbuffered > 0)
-    {
-        auto frame_it = frames_buffer.begin();
-        if (!frame_it->second)
+    for(int i = 0; i < frames_buffer.size(); i++){
+        std::pair<error_code,Message_Base *> frame = frames_buffer[i];
+        if(!frame.second) continue;
+        EV << frame.second->getHeader() << "\n";
+        if(frame.second->getHeader() == ack_num) {
+            index = i;
             break;
-        // if a timer is set for this frame, it's not acknowledged yet
-        if (timeouts_buffer[frame_it->second->getHeader()])
-            break;
-        frames_buffer.erase(frames_buffer.begin());
-        nbuffered--;
-        EV << "\nnbuffered is: " << nbuffered;
+        }
     }
-    frames_buffer.resize(MAX_SEQ);
+    if(index == -1) return;
+    if(index == 0) EV<<"index is 0\n";
+    for (int i = 0 ; i < nbuffered - index ; i++) {
+//        auto owner = frames_buffer[i].second->getOwner());
+        if(i < index)
+        {
+            stop_timer(frames_buffer[i].second->getHeader());
+            delete frames_buffer[i].second;
+        }
+//        else{
+//            EV<< "NO OWNER\n";
+//        }
+        frames_buffer[i] = frames_buffer[i+index];
+
+    }
+    nbuffered-= index;
+
 }
 
 void Node:: handle_frame_arrival(Message_Base *frame)
 {
     switch(frame->getFrame_Type()){
         case ACK:   // this is the sender node
-            stop_timer(frame->getHeader());
-            update_window(frame->getHeader());
-            delete frame;
+//            stop_timer(frame->getHeader());
+            update_window(frame->getAck_Num());
+//            delete frame;
             break;
         case Data:  // this is the receiver node
             if (frame->getHeader() == frame_expected){
@@ -168,7 +171,7 @@ void Node::start_timer(int frame_seq_num)
 
 void Node::stop_timer(int frame_seq_num)
 {
-    EV << "stopping timer for " << std::to_string(frame_seq_num);
+    EV << "stopping timer for " << std::to_string(frame_seq_num) << "\n";
     cancelAndDelete(timeouts_buffer[frame_seq_num]);
     timeouts_buffer[frame_seq_num] = nullptr;
 }
@@ -213,7 +216,7 @@ void Node::send_data(std::string payload, error_code error)
     error_detection(msg);
 
     // The ACK/NACK number are set as the sequence number of the next expected frame
-    int ack_num = (frame_expected + MAX_SEQ) % (MAX_SEQ + 1);
+    int ack_num = (frame_expected + 1) % (MAX_SEQ+1);
     msg->setAck_Num(ack_num);
 
     // set delayTime to transmission  delay parameter
@@ -223,7 +226,7 @@ void Node::send_data(std::string payload, error_code error)
     frames_buffer[nbuffered] = {error, msg};
 
     // apply errors on message according to error code
-    apply_error(error, delayTime, msg);
+    apply_error(error, delayTime, msg->dup());
 
     // start timer for that particular frame
     start_timer(next_frame_to_send_seq_num);
@@ -321,13 +324,14 @@ void Node::error_detection(Message_Base *msg)
         msg->setTrailer('0');
     }
     else{
-        std::string message_name = "ack frame " + std::to_string(frame_expected);
-        Message_Base *control_msg = new Message_Base(message_name.c_str());
-        control_msg->setFrame_Type(ACK);
-        control_msg->setHeader(frame_expected);
+//        Message_Base *control_msg = new Message_Base(message_name.c_str());
+        msg->setFrame_Type(ACK);
+        msg->setHeader(frame_expected);
         inc(frame_expected);
-        control_msg->setAck_Num(frame_expected);
-        send_control(control_msg);
+        std::string message_name = "ack frame " + std::to_string(frame_expected);
+        msg->setName(message_name.c_str());
+        msg->setAck_Num(frame_expected);
+        send_control(msg);
     }
 }
 void Node::send_control(Message_Base *msg){
