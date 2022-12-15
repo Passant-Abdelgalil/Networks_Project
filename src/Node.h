@@ -10,33 +10,61 @@
 #include <omnetpp.h>
 #include <algorithm>
 #include <vector>
+#include <fstream>
 #include "message_m.h"
 
 using namespace omnetpp;
 
 enum error_code {
-    NO_ERRORs,           // 0000
-    DELAY,              // 0001
-    DUP,                // 0010
-    DUP_DELAY,          // 0011
-    LOSS,               // 0100 , 1100 , 1101
-    LOSS_BOTH,          // 0101 , 0111 , 1110 , 1111
-    MOD,                // 1000
-    MOD_DELAY,          // 1001
-    MOD_DUP,            // 1010
-    MOD_DUP_DELAY,      // 1011
+    NO_ERRORs,
+    DELAY,
+    DUP,
+    DUP_DELAY,
+    LOSS,
+    LOSS_BOTH,
+    MOD,
+    MOD_DELAY,
+    MOD_DUP,
+    MOD_DUP_DELAY,
+};
+
+
+std::map<std::string, error_code> error_codes = {
+        {"0000", NO_ERRORs},
+        {"0001", DELAY},
+        {"0010", DUP},
+        {"0011", DUP_DELAY},
+        {"0100", LOSS},
+        {"0101", LOSS},
+        {"0110", LOSS},
+        {"0111", LOSS},
+        {"1000", MOD},
+        {"1001", MOD_DELAY},
+        {"1010", MOD_DUP},
+        {"1011", MOD_DUP_DELAY},
+        {"1100", LOSS},
+        {"1101", LOSS},
+        {"1110", LOSS},
+        {"1111", LOSS},
+};
+
+enum log_info_type {
+    UPON_READING,
+    BEFORE_TRANS,
+    TIMEOUT_EVENT,
+    CONTROL_FRAME,
 };
 
 
 class Node : public cSimpleModule {
 public:
-    std::pair<error_code, std::string> get_next_message();
+    std::pair<std::string, std::string> get_next_message();
     void start_protocol();
     void handle_frame_arrival(Message_Base *frame);
     void handle_network_layer_ready();
     void handle_checksum_err(cMessage *frame);
     void handle_timeout(int frame_seq);
-    void send_data(std::string payload, error_code error, double sendingTime = 0);
+    void send_data(std::string payload, std::string error, double sendingOffsetTime = 0);
     void send_control(Message_Base *msg);
     void start_timer(int frame_seq_num, double delayTime = 0);
     void stop_timer(int frame_seq_num);
@@ -44,10 +72,14 @@ public:
     void update_window(int ack_num);
     void acknowledge_frame(int ack_num);
 
-    void apply_error(error_code error, double time, Message_Base *msg);
+    void apply_error_and_send(std::string error, double time, Message_Base *msg);
     double delay_frame(double time, Message_Base *msg);
     double duplicate_frame(double time, Message_Base *msg);
-    std::string modify_frame(double time, Message_Base *msg);
+    int modify_frame(double time, Message_Base *msg);
+
+    void log_to_file(log_info_type info_type, double event_time, char nodeId,
+        Message_Base* msg, bool lost, std::string error="", int modified_bit=-1,
+         int duplicate_version=0,  double delayInterval=0);
 
 
     std::string frame_packet(std::string payload);
@@ -71,6 +103,9 @@ public:
     virtual void initialize();
     virtual void handleMessage(cMessage *msg);
 
+    std::ofstream output_file;
+    std::ifstream input_file;
+
     // GO Back N Fields
     int MAX_SEQ = 1;
     int next_frame_to_send_seq_num;
@@ -79,9 +114,9 @@ public:
     int nbuffered = 0;
     int line = 0;
     int sentMessagesNumber = 0;
-    int nodeId;
+    char nodeId;
     int numOfLines;
-    std::vector<std::pair<error_code,Message_Base *> > frames_buffer;
+    std::vector<std::pair<std::string,Message_Base *> > frames_buffer;
     std::vector<cMessage *> timeouts_buffer;
 };
 

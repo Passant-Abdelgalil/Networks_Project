@@ -29,6 +29,14 @@ void Node::initialize() {
     // enable network layer
     network_layer_enabled = true;
 
+    // set node id
+    std::string node_name(getName());
+    nodeId = node_name.back();
+
+    // prepare output file for writing logs
+    output_file.open("../src/output.txt", std::ios_base::app);
+    EV << "Input File is open = " << input_file.is_open() <<endl;
+
     // buffers to store pointers to messages
     frames_buffer.resize(MAX_SEQ);
     timeouts_buffer.resize(MAX_SEQ);
@@ -39,24 +47,15 @@ void Node::handleMessage(cMessage *msg)
     // check if this message is from the coordinator
     if(msg->arrivedOn("in_ports", 0)) {
 
-        EV << "Node Id From Node = " << msg->par(msg->findPar("nodeId")).longValue() << endl;
-//        EV << "Starting Time From Node = " << msg->par(msg->findPar("startTime")).longValue() << endl;
-//        EV << "simTime Time From Node = " << simTime() << endl;
-
-        nodeId = msg->par(msg->findPar("nodeId")).longValue();
-        long startTime = msg->par(msg->findPar("startTime")).longValue();
+        long startTime = msg->par("startTime").longValue();
 
         start_protocol();
         delete msg;
+
         cMessage * self_msg = new cMessage("enable network");
         scheduleAt(simTime() + static_cast<simtime_t>(getParentModule()->par("PT").doubleValue()) + static_cast<simtime_t>(startTime), self_msg);
     }
     else if(strcmp(msg->getName(), "enable network") == 0) {
-        if(initialState){
-            readInputFile();
-            initialState = false;
-        }
-
         if(network_layer_enabled)
             handle_network_layer_ready();
         delete msg;
@@ -70,8 +69,6 @@ void Node::handleMessage(cMessage *msg)
         // get sequence number of the timed out frame
         int frame_seq_num = msg->par("frame_seq");
         handle_timeout(frame_seq_num);
-
-        delete msg;
     }
     else  // frame_arrival event
         handle_frame_arrival(dynamic_cast<Message_Base *>(msg));
@@ -89,8 +86,19 @@ void Node::start_protocol() {
     // set the WS for this sender protocol instance
     MAX_SEQ = getParentModule()->par("WS").intValue();
 
+    std::string input_file_name = "../src/input";
+    input_file_name.push_back(nodeId);
+    input_file_name.append(".txt");
+
+    // prepare input file for reading messages
+    input_file.open(input_file_name);
+
+    EV << "Input File is open = " << input_file.is_open() <<endl;
+
     frames_buffer.resize(MAX_SEQ);
     timeouts_buffer.resize(MAX_SEQ);
+
+    readInputFile();
 }
 void Node::inc(int& frame_seq_num)
 {
@@ -98,17 +106,15 @@ void Node::inc(int& frame_seq_num)
 }
 
 void Node::handle_timeout(int frame_seq_num){
+
     next_frame_to_send_seq_num = frames_buffer[0].second->getHeader();
     int size = nbuffered;
     nbuffered = 0;
     double sendingTime = 0;
     // re-transmit all frames in the buffer
     for (int i = 0; i < size; i++){
-        std::pair<error_code, Message_Base*> frame_info = frames_buffer[i];
+        std::pair<std::string, Message_Base*> frame_info = frames_buffer[i];
         std::string payload(frame_info.second->getM_Payload());
-
-
-
         /*
          * all the messages in the sender’s window will be transmitted again as
          * usual with the normal calculations for errors and delays except for
@@ -117,16 +123,14 @@ void Node::handle_timeout(int frame_seq_num){
          * */
 
         sendingTime = getParentModule()->par("PT").doubleValue() + sendingTime;
+        // remove the timeout for this frame if any
+        stop_timer(frame_info.second->getHeader());
 
         if(frame_info.second->getHeader() == frame_seq_num){
-            EV << "Message From Handle Time Out With Error Free = " << payload <<endl;
-            send_data(payload, NO_ERRORs, sendingTime);
+            log_to_file(TIMEOUT_EVENT, simTime().dbl(), nodeId, frame_info.second, false);
+            send_data(payload, "0000", sendingTime);
         }
-
         else {
-            // remove the timeout for this frame if any
-            EV << "Message From Handle Time Out With Error = " << payload <<endl;
-            stop_timer(frame_info.second->getHeader());
             send_data(payload, frame_info.first,sendingTime);
         }
     }
@@ -137,18 +141,32 @@ void Node::handle_timeout(int frame_seq_num){
 void Node::update_window(int ack_num){
     int index = -1;
     for(int i = 0; i < nbuffered; i++){
-        std::pair<error_code, Message_Base*> frame = frames_buffer[i];
+        std::pair<std::string, Message_Base*> frame = frames_buffer[i];
         if(!frame.second) continue;
         if(frame.second->getHeader() == ack_num) {
             index = i;
             break;
         }
     }
-    if(index == -1) return;
+    // all frames in the window is acknowledged
+    if(index == -1){
+        EV<<"index is -1\n";
+        for(int i = 0; i < nbuffered; i++){
+            sentMessagesNumber++;
+            stop_timer(frames_buffer[i].second->getHeader());
+            delete frames_buffer[i].second;
+        }
+        nbuffered = 0;
+        return;
+    }else{
+        EV<<"index is " << index << endl;
+
+    }
     if(index == 0) EV << "index is 0\n";
 
     for(int i = 0; i < nbuffered -index; i++){
         if(i < index){
+            sentMessagesNumber++;
             stop_timer(frames_buffer[i].second->getHeader());
             delete frames_buffer[i].second;
         }
@@ -163,12 +181,8 @@ void Node:: handle_frame_arrival(Message_Base *frame)
 {
     switch(frame->getFrame_Type()){
         case ACK:   // this is the sender node
-//            stop_timer(frame->getHeader());
             update_window(frame->getAck_Num());
             sentMessagesNumber++;
-            EV << "From Handle Frame sentMessagesNumber = " << sentMessagesNumber << endl;
-            EV << "From Handle Frame numOfLines = " << numOfLines << endl;
-//            delete frame;
             break;
         case Data:  // this is the receiver node
             if (frame->getHeader() == frame_expected){
@@ -198,7 +212,7 @@ void Node::start_timer(int frame_seq_num, double delayTime)
 
 void Node::stop_timer(int frame_seq_num)
 {
-    EV << "stopping timer for " << std::to_string(frame_seq_num);
+//    EV << "stopping timer for " << std::to_string(frame_seq_num);
     cancelAndDelete(timeouts_buffer[frame_seq_num]);
     timeouts_buffer[frame_seq_num] = nullptr;
 }
@@ -214,83 +228,88 @@ double Node::duplicate_frame(double time, Message_Base *msg){
     return time;
 }
 
-std::string Node::modify_frame(double time, Message_Base *msg){
+int Node::modify_frame(double time, Message_Base *msg){
     std::string payload(msg->getM_Payload());
-    int bit_index =  intuniform(0,static_cast<int>(payload.length())-1, 0);
-    payload[bit_index] = '1' - payload[bit_index];
+    // select random bit index
+    int bit_index =  intuniform(0,static_cast<int>(payload.length())*8-1, 0);
+    // get the char that contains that bit
+    char selected_char =  payload[bit_index/8];
+    // construct bitset of the char to flip the selected bit
+    std::bitset<8> char_bits(selected_char);
+    // flip the selected bit
+    char_bits[bit_index%8].flip();
+    // update the payload after the modification
+    payload[bit_index/8] = static_cast<char>(char_bits.to_ulong());
+
     msg->setM_Payload(payload.c_str());
-    return payload;
+
+    return bit_index;
 }
 
-void Node::send_data(std::string payload, error_code error, double sendingTime)
+void Node::send_data(std::string payload, std::string error, double sendingOffsetTime)
 {
     // set message name according to frame sequence number
     std::string message_name = "message " + std::to_string(next_frame_to_send_seq_num);
     Message_Base* msg = new Message_Base(message_name.c_str());
-    Message_Base* msg_dup = new Message_Base(message_name.c_str());
 
-    // set sequence number
+    // fill message information
     msg->setHeader(next_frame_to_send_seq_num);
-    msg_dup->setHeader(next_frame_to_send_seq_num);
+    msg->setM_Payload(payload.c_str());
+    msg->setFrame_Type(Data);
+    int ack_num = (next_frame_to_send_seq_num + 1) % (MAX_SEQ + 1);
+    msg->setAck_Num(ack_num);
+
+    // clone the message to store a copy of it
+    Message_Base *msg_dup = msg->dup();
 
     // apply framing algorithm
     std::string framed_payload = frame_packet(payload);
-
     // update the frame payload
     msg->setM_Payload(framed_payload.c_str());
-    msg_dup->setM_Payload(payload.c_str());
-
-    // set frame type to data
-    msg->setFrame_Type(Data);
 
     // apply error detection algorithm and fill corresponding data
     error_detection(msg);
 
-    // The ACK/NACK number are set as the sequence number of the next expected frame
-    int ack_num = (frame_expected + 1) % (MAX_SEQ + 1);
-    msg->setAck_Num(ack_num);
-    msg_dup->setAck_Num(ack_num);
-
-    // set delayTime to transmission  delay parameter
-    double delayTime = getParentModule()->par("TD").doubleValue() + sendingTime;
-
     // store message to the buffer
     frames_buffer[nbuffered] = {error, msg_dup};
 
-
     // apply errors on message according to error code
-    apply_error(error, delayTime, msg);
+    apply_error_and_send(error, sendingOffsetTime, msg);
 
     // start timer for that particular frame
-    start_timer(next_frame_to_send_seq_num, sendingTime);
+    start_timer(next_frame_to_send_seq_num, sendingOffsetTime);
 
     //expand the sender's window
     nbuffered = nbuffered + 1;
-    EV << "\nsend_data, nbuffered is: " << nbuffered;
-
 
     inc(next_frame_to_send_seq_num);
 }
 
-void Node:: apply_error(error_code error, double delayTime, Message_Base *msg){
+void Node:: apply_error_and_send(std::string error, double sendingOffsetTime, Message_Base *msg){
     bool lose_frame = false;
     std::string modified_frame;
     double loss_prob = getParentModule()->par("LP").doubleValue();
+    int modified_bit = -1;
+    int delay_interval = 0;
+    int duplicate_version = 0;
 
-    switch(error)
+    double delayTime = sendingOffsetTime + getParentModule()->par("TD").doubleValue();
+    switch(error_codes[error])
     {
     case NO_ERRORs:
-        // send the message after the processing delay time only
+        // delayTime = PT + TD
         sendDelayed(msg, delayTime, "out_port");
         break;
     case DUP:
         duplicate_frame(delayTime, msg);
         break;
     case DELAY:
+        delay_interval = delay_frame(delayTime, msg) - delayTime;
         delayTime = delay_frame(delayTime, msg);
         sendDelayed(msg, delayTime, "out_port");
         break;
     case DUP_DELAY:
+        delay_interval = delay_frame(delayTime, msg) - delayTime;
         delayTime = delay_frame(delayTime, msg);
         sendDelayed(msg, delayTime, "out_port");
         duplicate_frame(delayTime, msg);
@@ -301,22 +320,23 @@ void Node:: apply_error(error_code error, double delayTime, Message_Base *msg){
             sendDelayed(msg, delayTime, "out_port");
         break;
     case MOD:
-        modify_frame(delayTime, msg);
+        modified_bit = modify_frame(delayTime, msg);
         sendDelayed(msg, delayTime, "out_port");
         break;
     case MOD_DELAY:
-        modify_frame(delayTime, msg);
+        modified_bit =  modify_frame(delayTime, msg);
+        delay_interval = delay_frame(delayTime, msg) - delayTime;
         delayTime =  delay_frame(delayTime, msg);
         sendDelayed(msg, delayTime, "out_port");
         break;
     case MOD_DUP:
-        modify_frame(delayTime, msg);
+        modified_bit =  modify_frame(delayTime, msg);
         sendDelayed(msg, delayTime, "out_port");
-//        EV << "From Node Before Sending Message " << msg->M_Payload <<endl;
         duplicate_frame(delayTime, msg);
         break;
     case MOD_DUP_DELAY:
-        modify_frame(delayTime, msg);
+        modified_bit = modify_frame(delayTime, msg);
+        delay_interval = delay_frame(delayTime, msg) - delayTime;
         delayTime = delay_frame(delayTime, msg);
         sendDelayed(msg, delayTime, "out_port");
         duplicate_frame(delayTime, msg);
@@ -327,13 +347,16 @@ void Node:: apply_error(error_code error, double delayTime, Message_Base *msg){
             sendDelayed(msg, delayTime, "out_port");
         break;
     }
+
+    log_to_file(BEFORE_TRANS, simTime().dbl() + sendingOffsetTime, nodeId, msg, lose_frame,
+            error, modified_bit, duplicate_version, delay_interval);
 }
 
 void Node::handle_network_layer_ready() {
     // read from the input file the next message to send
-    std::pair<error_code, std::string> message_info = get_next_message();
+    std::pair<std::string, std::string> message_info = get_next_message();
     std::string payload = message_info.second;
-    error_code error = message_info.first;
+    std::string error = message_info.first;
 
     // send the data
     if(nbuffered < MAX_SEQ)
@@ -342,11 +365,7 @@ void Node::handle_network_layer_ready() {
 
 
 
-std::pair<error_code, std::string> Node::get_next_message(){
-    // TODO: Implement File Parser read function
-
-//    EV << "From Node Messages = " << messages[line]<< endl;
-//    EV << "From Node Messages = " << errors[line]<< endl;
+std::pair<std::string, std::string> Node::get_next_message(){
 
     std::string error = "";
     std::string message = "";
@@ -357,59 +376,15 @@ std::pair<error_code, std::string> Node::get_next_message(){
         line++;
     }
 
-//    EV << "From Node Line = " <<line <<endl;
-//    EV << "From Node Error = " <<error;
-//    EV << "From Node Error = " <<error.size() << endl;
-//
-//    if(numOfLines == line){
-//        end_communication = true;
-//        EV << "From Node Line = " <<line <<endl;
-//        EV << "From Node Error = " <<error;
-//        EV << "From Node Error = " <<error.size() << endl;
-//    }
+    log_to_file(UPON_READING, simTime().dbl() - getParentModule()->par("PT").doubleValue(),
+                nodeId, nullptr, false, error);
 
-    if(error == "0000 ")
-        return  {NO_ERRORs, message};
-    else if(error == "0001 ")
-        return  {DELAY, message};
-    else if(error == "0010 ")
-        return  {DUP, message};
-    else if(error == "0011 ")
-        return  {DUP_DELAY, message};
-    else if(error == "0100 ")
-        return  {LOSS, message};
-    else if(error == "0101 ")
-        return  {LOSS, message};
-    else if(error== "0110 ")
-        return  {LOSS_BOTH, message};
-    else if(error == "0111 ")
-        return  {LOSS_BOTH, message};
-    else if(error == "1000 ")
-        return  {MOD, message};
-    else if(error == "1001 ")
-        return  {MOD_DELAY, message};
-    else if(error == "1010 ")
-        return  {MOD_DUP, message};
-    else if(error == "1011 ")
-        return  {MOD_DUP_DELAY, message};
-    else if(error == "1100 ")
-        return  {LOSS, message};
-    else if(error == "1101 ")
-        return  {LOSS, message};
-    else if(error == "1110 ")
-        return  {LOSS_BOTH, message};
-    else if(error == "1111 ")
-        return  {LOSS_BOTH, message};
+    return {error, message};
 
-    return  {NO_ERRORs,"Hello"};
 }
 
 std::string Node::frame_packet(std::string payload)
 {
-    // TODO: Implement Framing Logic
-
-//    EV << "From Packet Payload = " << payload;
-
     // Framing
     std::string frame = "";
     frame += '$';
@@ -421,76 +396,48 @@ std::string Node::frame_packet(std::string payload)
     }
     frame+='$';
 
-//    EV << "From Packet frame = " << frame;
-
     return frame;
 }
 
 void Node::error_detection(Message_Base *msg)
 {
-
-    // TODO: Implement Framing Logic
     if(sender){
-//       EV << "From Error detection = " << msg->M_Payload;
         std::bitset<8> parityByte(0);
-
-//        EV << "From Error detection = " << msg->M_Payload.size() << endl;
 
         for(int i = 0; i < msg->M_Payload.size(); i++)
             parityByte ^= std::bitset<8>( msg->M_Payload.c_str()[i]);
-
-        EV << "From Error detection Sender parityByte = " << char(parityByte.to_ulong()) <<endl;
-        EV << "From Error detection Sender Message = " << msg->M_Payload <<endl;
 
         msg->setTrailer(parityByte.to_ulong());
     }
     else{
 
-        EV << "From Error detection Receiver = " << msg->M_Payload<<endl;
-//        EV << "From Error detection Receiver = " << msg->getTrailer()<<endl;
         std::bitset<8> parityByte(0);
         for(int i = 0; i < msg->M_Payload.size(); i++)
                     parityByte ^= std::bitset<8>( msg->M_Payload.c_str()[i]);
-//        EV << "From Error detection Receiver parityByte = " << char(parityByte.to_ulong()) <<endl;
 
-//           if(parityByte.to_ulong() == msg->getTrailer())
-//               EV << "From Error detection Receiver parityByte Condition= " << true <<endl;
-//           else
-//               EV << "From Error detection Receiver parityByte Condition= " << false <<endl;
-
-//        Message_Base *control_msg = new Message_Base(message_name.c_str());
-
-        EV << "From Error detection Receiver Frame Expected = " << frame_expected <<endl;
-        EV << "From Error detection Receiver Message Header = " << msg->getHeader() <<endl;
         if(parityByte.to_ulong() == msg->getTrailer() && frame_expected == msg->getHeader()){
-//            msg->setHeader(frame_expected);
             inc(frame_expected);
             msg->setFrame_Type(ACK);
-            EV << "From Error detection Receiver ACK"<<endl;
         }
 
         else{
             msg->setHeader(frame_expected);
             msg->setFrame_Type(NACK);
-            EV << "From Error detection Receiver NACK"<<endl;
-
         }
 
         std::string message_name = "ack frame " + std::to_string(frame_expected);
         msg->setAck_Num(frame_expected);
+
         send_control(msg);
     }
 }
 void Node::send_control(Message_Base *msg){
 
-    /* TODO:
-     * log next message
-     * At time[.. starting sending time after processing….. ], Node[id] Sending [ACK/NACK] with
-        number […] , loss [Yes/No ]
-     * */
-
     // Lose the frame with probability LP
     bool lose_frame = static_cast<bool>(bernoulli(getParentModule()->par("LP").doubleValue(), 0));
+
+    log_to_file(CONTROL_FRAME, simTime().dbl(), nodeId, msg, lose_frame);
+
     if (lose_frame)
         delete msg;
     else {
@@ -510,21 +457,18 @@ void Node::tokenize(std::string const &str, const char delim,
 
     std::string s;
     while (std::getline(ss, s, delim)) {
-        out.push_back(s + " ");
+        out.push_back(s);
     }
 }
 
 void Node::readInputFile(){
     std::string line;
-    std::ifstream filestream("C:\\Users\\CMP\\OneDrive\\Documents\\GitHub\\Networks_Project\\src\\input0.txt");
-    EV << " File is open = " << filestream.is_open() <<endl;
-
-    if(filestream.is_open()) {
+    if(input_file.is_open()) {
 
         const char delim = ' ';
         int k = 0;
 
-        while (getline(filestream, line)) {
+        while (getline(input_file, line)) {
 
             std::string error = "";
             std::string message = "";
@@ -540,15 +484,44 @@ void Node::readInputFile(){
             errors.push_back(error);
             k++;
 
-
-//            EV << "Error From Node Base = " << typeid(error).name() << endl;
-//            EV << "Message From Node  = " << message << endl;
-
-
         }
 
         numOfLines = k;
-        filestream.close();
+        input_file.close();
     }
+}
 
+void Node::log_to_file(log_info_type info_type, double event_time, char nodeId,
+        Message_Base* msg, bool lost, std::string error, int modified_bit,
+         int duplicate_version, double delayInterval) {
+
+//    output_file.open("output.txt");
+    switch(info_type){
+    case UPON_READING:
+        output_file << "At time[" << event_time << "], Node[" << nodeId <<
+        "], Introducing channel error with code =[" << error <<  "]\n";
+        output_file << std::flush;
+        break;
+    case BEFORE_TRANS:
+        output_file << "At time [" << event_time << "], Node["<< nodeId <<
+        "] sent frame with seq_num = [" << std::to_string(msg->getHeader())
+        << "] and payload = [" << msg->getM_Payload() << "] and trailer =[" << std::bitset<8>(msg->getTrailer()).to_string()
+                << "], Modified [" << modified_bit << "], Lost[" << lost <<
+                "], Duplicate[" << duplicate_version << "], Delay [" << delayInterval <<  "]\n";
+        output_file << std::flush;
+        break;
+    case TIMEOUT_EVENT:
+        output_file << "Time out event at time [" << event_time << "], at Node["
+        << nodeId <<"], for frame with seq_num=[" << msg->getHeader() <<"]\n";
+        break;
+    case CONTROL_FRAME:
+        std::string ack_type = (msg->getFrame_Type() == ACK ? "ACK": "NACK");
+        int seq_num = msg->getAck_Num();
+        output_file << "At time[" << event_time << "], Node[" << nodeId <<
+                    "] sending [" << ack_type << "] with number["
+                    << seq_num << "], loss[" << (lost?"Yes":"No")<<"]\n";
+        output_file << std::flush;
+        break;
+    }
+//    output_file.close();
 }
