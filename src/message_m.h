@@ -19,11 +19,11 @@
 
 
 // cplusplus {{
-	#include <bitset>
-	typedef std::bitset<8> bits;
-	typedef unsigned char Byte;
-	
-	enum Msg_Type { Data, ACK, NACK };
+    #include <bitset>
+    typedef std::bitset<8> bits;
+    typedef unsigned char Byte;
+
+    enum Msg_Type { Data, ACK, NACK };
 // }}
 
 /**
@@ -31,13 +31,13 @@
  * <pre>
  * packet Message
  * {
- *     \@customize(true);  	// see the generated C++ header for more info
+ *     \@customize(true);   // see the generated C++ header for more info
  * 
- *     int Header;			// the data sequence number.
- *     string M_Payload;	// the message contents after byte stuffing (in characters).
- *     Byte Trailer;		// the parity byte.
+ *     int Header;          // the data sequence number.
+ *     string M_Payload;    // the message contents after byte stuffing (in characters).
+ *     Byte Trailer;        // the parity byte.
  *     Msg_Type Frame_Type;// Data=0/ACK=1 /NACK=2.
- *     int Ack_Num;		// ACK/NACK number.
+ *     int Ack_Num;     // ACK/NACK number.
  * }
  * </pre>
  *
@@ -118,4 +118,3 @@ class Message_Base : public ::omnetpp::cPacket
 
 
 #endif // ifndef __MESSAGE_M_H
-

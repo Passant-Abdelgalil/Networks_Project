@@ -60,7 +60,8 @@ void Node::handleMessage(cMessage *msg)
         if(network_layer_enabled)
             handle_network_layer_ready();
         delete msg;
-        if(!end_communication){
+
+        if(sentMessagesNumber < numOfLines){
             cMessage * self_msg = new cMessage("enable network");
             scheduleAt(simTime() + static_cast<simtime_t>(getParentModule()->par("PT").doubleValue()), self_msg);
         }
@@ -75,7 +76,7 @@ void Node::handleMessage(cMessage *msg)
     else  // frame_arrival event
         handle_frame_arrival(dynamic_cast<Message_Base *>(msg));
 
-    if(sender && nbuffered < MAX_SEQ)
+    if(sender && nbuffered < MAX_SEQ && line < numOfLines)
         network_layer_enabled = true;
     else
         network_layer_enabled = false;
@@ -93,17 +94,20 @@ void Node::start_protocol() {
 }
 void Node::inc(int& frame_seq_num)
 {
-    frame_seq_num = (frame_seq_num + 1) % getParentModule()->par("WS").intValue();;
+    frame_seq_num = (frame_seq_num + 1) % (getParentModule()->par("WS").intValue() + 1);
 }
 
 void Node::handle_timeout(int frame_seq_num){
-    next_frame_to_send_seq_num = ack_expected;
+    next_frame_to_send_seq_num = frames_buffer[0].second->getHeader();
     int size = nbuffered;
     nbuffered = 0;
+    double sendingTime = 0;
     // re-transmit all frames in the buffer
     for (int i = 0; i < size; i++){
         std::pair<error_code, Message_Base*> frame_info = frames_buffer[i];
         std::string payload(frame_info.second->getM_Payload());
+
+
 
         /*
          * all the messages in the sender’s window will be transmitted again as
@@ -112,12 +116,18 @@ void Node::handle_timeout(int frame_seq_num){
          * it will be sent error free
          * */
 
-        if(frame_info.second->getHeader() == frame_seq_num)
-            send_data(payload, NO_ERRORs);
+        sendingTime = getParentModule()->par("PT").doubleValue() + sendingTime;
+
+        if(frame_info.second->getHeader() == frame_seq_num){
+            EV << "Message From Handle Time Out With Error Free = " << payload <<endl;
+            send_data(payload, NO_ERRORs, sendingTime);
+        }
+
         else {
             // remove the timeout for this frame if any
+            EV << "Message From Handle Time Out With Error = " << payload <<endl;
             stop_timer(frame_info.second->getHeader());
-            send_data(payload, frame_info.first);
+            send_data(payload, frame_info.first,sendingTime);
         }
     }
 
@@ -125,41 +135,40 @@ void Node::handle_timeout(int frame_seq_num){
 
 
 void Node::update_window(int ack_num){
-
-    // don't update the window if the received acknowledge isn't the expected one
-    if (ack_num != frames_buffer.front().second->getHeader())
-        return;
-
-    // advance the expected acknowledge sequence number
-    inc(ack_expected);
-
-    // shift frames within the buffer to the left
-    frames_buffer.erase(frames_buffer.begin());
-    nbuffered--;
-    EV << "\nnbuffered is: " << nbuffered;
-
-    while(!frames_buffer.empty() && nbuffered > 0)
-    {
-        auto frame_it = frames_buffer.begin();
-        if (!frame_it->second)
+    int index = -1;
+    for(int i = 0; i < nbuffered; i++){
+        std::pair<error_code, Message_Base*> frame = frames_buffer[i];
+        if(!frame.second) continue;
+        if(frame.second->getHeader() == ack_num) {
+            index = i;
             break;
-        // if a timer is set for this frame, it's not acknowledged yet
-        if (timeouts_buffer[frame_it->second->getHeader()])
-            break;
-        frames_buffer.erase(frames_buffer.begin());
-        nbuffered--;
-        EV << "\nnbuffered is: " << nbuffered;
+        }
     }
-    frames_buffer.resize(MAX_SEQ);
+    if(index == -1) return;
+    if(index == 0) EV << "index is 0\n";
+
+    for(int i = 0; i < nbuffered -index; i++){
+        if(i < index){
+            stop_timer(frames_buffer[i].second->getHeader());
+            delete frames_buffer[i].second;
+        }
+
+        frames_buffer[i] = frames_buffer[i+index];
+    }
+
+    nbuffered -= index;
 }
 
 void Node:: handle_frame_arrival(Message_Base *frame)
 {
     switch(frame->getFrame_Type()){
         case ACK:   // this is the sender node
-            stop_timer(frame->getHeader());
-            update_window(frame->getHeader());
-            delete frame;
+//            stop_timer(frame->getHeader());
+            update_window(frame->getAck_Num());
+            sentMessagesNumber++;
+            EV << "From Handle Frame sentMessagesNumber = " << sentMessagesNumber << endl;
+            EV << "From Handle Frame numOfLines = " << numOfLines << endl;
+//            delete frame;
             break;
         case Data:  // this is the receiver node
             if (frame->getHeader() == frame_expected){
@@ -175,14 +184,14 @@ void Node:: handle_frame_arrival(Message_Base *frame)
     }
 }
 
-void Node::start_timer(int frame_seq_num)
+void Node::start_timer(int frame_seq_num, double delayTime)
 {
     // start new timer for this message
     cMessage* timeout_message = new cMessage("timeout");
     timeout_message->addPar("frame_seq");
     timeout_message->par("frame_seq").setLongValue(frame_seq_num);
     // set the timer value according to TO parameter
-    scheduleAt(simTime()+static_cast<simtime_t>(getParentModule()->par("TO").doubleValue()), timeout_message);
+    scheduleAt(simTime()+static_cast<simtime_t>(getParentModule()->par("TO").doubleValue() + delayTime), timeout_message);
     // store the timer msg pointer to access later in case of stop_timer
     timeouts_buffer[frame_seq_num] = timeout_message;
 }
@@ -213,19 +222,23 @@ std::string Node::modify_frame(double time, Message_Base *msg){
     return payload;
 }
 
-void Node::send_data(std::string payload, error_code error)
+void Node::send_data(std::string payload, error_code error, double sendingTime)
 {
     // set message name according to frame sequence number
     std::string message_name = "message " + std::to_string(next_frame_to_send_seq_num);
     Message_Base* msg = new Message_Base(message_name.c_str());
+    Message_Base* msg_dup = new Message_Base(message_name.c_str());
 
     // set sequence number
     msg->setHeader(next_frame_to_send_seq_num);
+    msg_dup->setHeader(next_frame_to_send_seq_num);
 
     // apply framing algorithm
     std::string framed_payload = frame_packet(payload);
+
     // update the frame payload
     msg->setM_Payload(framed_payload.c_str());
+    msg_dup->setM_Payload(payload.c_str());
 
     // set frame type to data
     msg->setFrame_Type(Data);
@@ -234,20 +247,22 @@ void Node::send_data(std::string payload, error_code error)
     error_detection(msg);
 
     // The ACK/NACK number are set as the sequence number of the next expected frame
-    int ack_num = (frame_expected + MAX_SEQ) % (MAX_SEQ + 1);
+    int ack_num = (frame_expected + 1) % (MAX_SEQ + 1);
     msg->setAck_Num(ack_num);
+    msg_dup->setAck_Num(ack_num);
 
     // set delayTime to transmission  delay parameter
-    double delayTime = getParentModule()->par("TD").doubleValue();
+    double delayTime = getParentModule()->par("TD").doubleValue() + sendingTime;
 
     // store message to the buffer
-    frames_buffer[nbuffered] = {error, msg};
+    frames_buffer[nbuffered] = {error, msg_dup};
+
 
     // apply errors on message according to error code
     apply_error(error, delayTime, msg);
 
     // start timer for that particular frame
-    start_timer(next_frame_to_send_seq_num);
+    start_timer(next_frame_to_send_seq_num, sendingTime);
 
     //expand the sender's window
     nbuffered = nbuffered + 1;
@@ -307,6 +322,9 @@ void Node:: apply_error(error_code error, double delayTime, Message_Base *msg){
         duplicate_frame(delayTime, msg);
         break;
     default:
+        lose_frame = static_cast<bool>(bernoulli(loss_prob, 0));
+        if (!lose_frame)
+            sendDelayed(msg, delayTime, "out_port");
         break;
     }
 }
@@ -342,13 +360,13 @@ std::pair<error_code, std::string> Node::get_next_message(){
 //    EV << "From Node Line = " <<line <<endl;
 //    EV << "From Node Error = " <<error;
 //    EV << "From Node Error = " <<error.size() << endl;
-
-    if(numOfLines == line){
-        end_communication = true;
-        EV << "From Node Line = " <<line <<endl;
-        EV << "From Node Error = " <<error;
-        EV << "From Node Error = " <<error.size() << endl;
-    }
+//
+//    if(numOfLines == line){
+//        end_communication = true;
+//        EV << "From Node Line = " <<line <<endl;
+//        EV << "From Node Error = " <<error;
+//        EV << "From Node Error = " <<error.size() << endl;
+//    }
 
     if(error == "0000 ")
         return  {NO_ERRORs, message};
@@ -422,6 +440,8 @@ void Node::error_detection(Message_Base *msg)
             parityByte ^= std::bitset<8>( msg->M_Payload.c_str()[i]);
 
         EV << "From Error detection Sender parityByte = " << char(parityByte.to_ulong()) <<endl;
+        EV << "From Error detection Sender Message = " << msg->M_Payload <<endl;
+
         msg->setTrailer(parityByte.to_ulong());
     }
     else{
@@ -438,19 +458,27 @@ void Node::error_detection(Message_Base *msg)
 //           else
 //               EV << "From Error detection Receiver parityByte Condition= " << false <<endl;
 
+//        Message_Base *control_msg = new Message_Base(message_name.c_str());
+
+        EV << "From Error detection Receiver Frame Expected = " << frame_expected <<endl;
+        EV << "From Error detection Receiver Message Header = " << msg->getHeader() <<endl;
+        if(parityByte.to_ulong() == msg->getTrailer() && frame_expected == msg->getHeader()){
+//            msg->setHeader(frame_expected);
+            inc(frame_expected);
+            msg->setFrame_Type(ACK);
+            EV << "From Error detection Receiver ACK"<<endl;
+        }
+
+        else{
+            msg->setHeader(frame_expected);
+            msg->setFrame_Type(NACK);
+            EV << "From Error detection Receiver NACK"<<endl;
+
+        }
+
         std::string message_name = "ack frame " + std::to_string(frame_expected);
-        Message_Base *control_msg = new Message_Base(message_name.c_str());
-
-
-        if(parityByte.to_ulong() == msg->getTrailer())
-            control_msg->setFrame_Type(ACK);
-        else
-            control_msg->setFrame_Type(NACK);
-
-        control_msg->setHeader(frame_expected);
-        inc(frame_expected);
-        control_msg->setAck_Num(frame_expected);
-        send_control(control_msg);
+        msg->setAck_Num(frame_expected);
+        send_control(msg);
     }
 }
 void Node::send_control(Message_Base *msg){

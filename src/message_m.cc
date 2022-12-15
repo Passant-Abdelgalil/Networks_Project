@@ -535,4 +535,3 @@ void *MessageDescriptor::getFieldStructValuePointer(void *object, int field, int
     }
 }
 
-

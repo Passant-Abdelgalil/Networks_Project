@@ -36,9 +36,9 @@ public:
     void handle_network_layer_ready();
     void handle_checksum_err(cMessage *frame);
     void handle_timeout(int frame_seq);
-    void send_data(std::string payload, error_code error);
+    void send_data(std::string payload, error_code error, double sendingTime = 0);
     void send_control(Message_Base *msg);
-    void start_timer(int frame_seq_num);
+    void start_timer(int frame_seq_num, double delayTime = 0);
     void stop_timer(int frame_seq_num);
     void inc(int& frame_seq_num);
     void update_window(int ack_num);
@@ -78,6 +78,7 @@ public:
     int frame_expected;
     int nbuffered = 0;
     int line = 0;
+    int sentMessagesNumber = 0;
     int nodeId;
     int numOfLines;
     std::vector<std::pair<error_code,Message_Base *> > frames_buffer;
