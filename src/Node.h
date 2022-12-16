@@ -64,7 +64,7 @@ public:
     void handle_network_layer_ready();
     void handle_checksum_err(cMessage *frame);
     void handle_timeout(int frame_seq);
-    void send_data(std::string payload, std::string error, double sendingOffsetTime = 0);
+    void send_data(std::string payload, std::string error, double sendingOffsetTime = 0.5);
     void send_control(Message_Base *msg);
     void start_timer(int frame_seq_num, double delayTime = 0);
     void stop_timer(int frame_seq_num);

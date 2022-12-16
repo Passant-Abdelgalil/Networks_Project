@@ -34,8 +34,11 @@ void Node::initialize() {
     nodeId = node_name.back();
 
     // prepare output file for writing logs
-    output_file.open("../src/output.txt", std::ios_base::app);
-    EV << "Input File is open = " << input_file.is_open() <<endl;
+    std::string output_file_name = "../src/output";
+    output_file_name.push_back(nodeId);
+    output_file_name.append(".txt");
+    output_file.open(output_file_name);
+    EV << "Output File is open = " << output_file.is_open() <<endl;
 
     // buffers to store pointers to messages
     frames_buffer.resize(MAX_SEQ);
@@ -53,7 +56,8 @@ void Node::handleMessage(cMessage *msg)
         delete msg;
 
         cMessage * self_msg = new cMessage("enable network");
-        scheduleAt(simTime() + static_cast<simtime_t>(getParentModule()->par("PT").doubleValue()) + static_cast<simtime_t>(startTime), self_msg);
+//        scheduleAt(simTime() + static_cast<simtime_t>(getParentModule()->par("PT").doubleValue()) + static_cast<simtime_t>(startTime), self_msg);
+        scheduleAt(simTime() + static_cast<simtime_t>(startTime), self_msg);
     }
     else if(strcmp(msg->getName(), "enable network") == 0) {
         if(network_layer_enabled)
@@ -150,7 +154,6 @@ void Node::update_window(int ack_num){
     }
     // all frames in the window is acknowledged
     if(index == -1){
-        EV<<"index is -1\n";
         for(int i = 0; i < nbuffered; i++){
             sentMessagesNumber++;
             stop_timer(frames_buffer[i].second->getHeader());
@@ -158,11 +161,7 @@ void Node::update_window(int ack_num){
         }
         nbuffered = 0;
         return;
-    }else{
-        EV<<"index is " << index << endl;
-
     }
-    if(index == 0) EV << "index is 0\n";
 
     for(int i = 0; i < nbuffered -index; i++){
         if(i < index){
@@ -182,7 +181,6 @@ void Node:: handle_frame_arrival(Message_Base *frame)
     switch(frame->getFrame_Type()){
         case ACK:   // this is the sender node
             update_window(frame->getAck_Num());
-            sentMessagesNumber++;
             break;
         case Data:  // this is the receiver node
             if (frame->getHeader() == frame_expected){
@@ -301,7 +299,13 @@ void Node:: apply_error_and_send(std::string error, double sendingOffsetTime, Me
         sendDelayed(msg, delayTime, "out_port");
         break;
     case DUP:
-        duplicate_frame(delayTime, msg);
+        sendDelayed(msg, delayTime, "out_port");
+        duplicate_version = 1;
+        log_to_file(BEFORE_TRANS, simTime().dbl() + sendingOffsetTime, nodeId, msg, lose_frame,
+                    error, modified_bit, duplicate_version, delay_interval);
+
+        duplicate_version = 2;
+        delay_interval += duplicate_frame(delayTime, msg) - delayTime;
         break;
     case DELAY:
         delay_interval = delay_frame(delayTime, msg) - delayTime;
@@ -312,7 +316,11 @@ void Node:: apply_error_and_send(std::string error, double sendingOffsetTime, Me
         delay_interval = delay_frame(delayTime, msg) - delayTime;
         delayTime = delay_frame(delayTime, msg);
         sendDelayed(msg, delayTime, "out_port");
-        duplicate_frame(delayTime, msg);
+        duplicate_version = 1;
+        log_to_file(BEFORE_TRANS, simTime().dbl() + sendingOffsetTime, nodeId, msg, lose_frame,
+                    error, modified_bit, duplicate_version, delay_interval);
+        duplicate_version = 2;
+        delay_interval += duplicate_frame(delayTime, msg) - delayTime;
         break;
     case LOSS:
         lose_frame = static_cast<bool>(bernoulli(loss_prob, 0));
@@ -332,14 +340,24 @@ void Node:: apply_error_and_send(std::string error, double sendingOffsetTime, Me
     case MOD_DUP:
         modified_bit =  modify_frame(delayTime, msg);
         sendDelayed(msg, delayTime, "out_port");
-        duplicate_frame(delayTime, msg);
+        duplicate_version = 1;
+        log_to_file(BEFORE_TRANS, simTime().dbl() + sendingOffsetTime, nodeId, msg, lose_frame,
+                    error, modified_bit, duplicate_version, delay_interval);
+
+        duplicate_version = 2;
+        delay_interval += duplicate_frame(delayTime, msg) - delayTime;
         break;
     case MOD_DUP_DELAY:
         modified_bit = modify_frame(delayTime, msg);
         delay_interval = delay_frame(delayTime, msg) - delayTime;
         delayTime = delay_frame(delayTime, msg);
         sendDelayed(msg, delayTime, "out_port");
-        duplicate_frame(delayTime, msg);
+        duplicate_version = 1;
+        log_to_file(BEFORE_TRANS, simTime().dbl() + sendingOffsetTime, nodeId, msg, lose_frame,
+                    error, modified_bit, duplicate_version, delay_interval);
+
+        duplicate_version = 2;
+        delay_interval += duplicate_frame(delayTime, msg) - delayTime;
         break;
     default:
         lose_frame = static_cast<bool>(bernoulli(loss_prob, 0));
@@ -376,8 +394,7 @@ std::pair<std::string, std::string> Node::get_next_message(){
         line++;
     }
 
-    log_to_file(UPON_READING, simTime().dbl() - getParentModule()->par("PT").doubleValue(),
-                nodeId, nullptr, false, error);
+    log_to_file(UPON_READING, simTime().dbl(), nodeId, nullptr, false, error);
 
     return {error, message};
 
@@ -388,7 +405,7 @@ std::string Node::frame_packet(std::string payload)
     // Framing
     std::string frame = "";
     frame += '$';
-    for(int i = 0; i < payload.size() - 1; i++){
+    for(int i = 0; i < payload.size(); i++){
         if(payload[i] == '$' || payload[i] == '/')
             frame+='/';
 
@@ -435,14 +452,14 @@ void Node::send_control(Message_Base *msg){
 
     // Lose the frame with probability LP
     bool lose_frame = static_cast<bool>(bernoulli(getParentModule()->par("LP").doubleValue(), 0));
+    // send the message after the computed delay interval
+    double delayTime = getParentModule()->par("PT").doubleValue();
 
-    log_to_file(CONTROL_FRAME, simTime().dbl(), nodeId, msg, lose_frame);
+    log_to_file(CONTROL_FRAME, simTime().dbl() + delayTime, nodeId, msg, lose_frame);
 
     if (lose_frame)
         delete msg;
     else {
-        // send the message after the computed delay interval
-        double delayTime = getParentModule()->par("PT").doubleValue();
         // increase the delay by the transmission delay
         delayTime += getParentModule()->par("TD").doubleValue();
         sendDelayed(msg, delayTime, "out_port");
@@ -457,7 +474,7 @@ void Node::tokenize(std::string const &str, const char delim,
 
     std::string s;
     while (std::getline(ss, s, delim)) {
-        out.push_back(s);
+        out.push_back(s + " ");
     }
 }
 
@@ -469,16 +486,18 @@ void Node::readInputFile(){
         int k = 0;
 
         while (getline(input_file, line)) {
-
             std::string error = "";
             std::string message = "";
             std::vector<std::string> result;
 
-            tokenize(line, delim, result);
+            std::size_t split_index = line.find(' ');
+            error = line.substr(0, split_index);
+            message = line.substr(split_index+1);
+//            tokenize(line, delim, result);
 
-            error = result[0];
-            for (int i = 1; i < result.size(); i++)
-                    message += result[i];
+//            error = result[0];
+//            for (int i = 1; i < result.size(); i++)
+//                    message += result[i];
 
             messages.push_back(message);
             errors.push_back(error);
@@ -496,6 +515,8 @@ void Node::log_to_file(log_info_type info_type, double event_time, char nodeId,
          int duplicate_version, double delayInterval) {
 
 //    output_file.open("output.txt");
+    EV << "Output File is open = " << output_file.is_open() <<endl;
+
     switch(info_type){
     case UPON_READING:
         output_file << "At time[" << event_time << "], Node[" << nodeId <<
