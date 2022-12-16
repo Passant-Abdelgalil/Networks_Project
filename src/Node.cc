@@ -323,9 +323,7 @@ void Node:: apply_error_and_send(std::string error, double sendingOffsetTime, Me
         delay_interval += duplicate_frame(delayTime, msg) - delayTime;
         break;
     case LOSS:
-        lose_frame = static_cast<bool>(bernoulli(loss_prob, 0));
-        if (!lose_frame)
-            sendDelayed(msg, delayTime, "out_port");
+        lose_frame = true;
         break;
     case MOD:
         modified_bit = modify_frame(delayTime, msg);
@@ -360,9 +358,7 @@ void Node:: apply_error_and_send(std::string error, double sendingOffsetTime, Me
         delay_interval += duplicate_frame(delayTime, msg) - delayTime;
         break;
     default:
-        lose_frame = static_cast<bool>(bernoulli(loss_prob, 0));
-        if (!lose_frame)
-            sendDelayed(msg, delayTime, "out_port");
+        lose_frame = true;
         break;
     }
 
@@ -527,7 +523,7 @@ void Node::log_to_file(log_info_type info_type, double event_time, char nodeId,
         output_file << "At time [" << event_time << "], Node["<< nodeId <<
         "] sent frame with seq_num = [" << std::to_string(msg->getHeader())
         << "] and payload = [" << msg->getM_Payload() << "] and trailer =[" << std::bitset<8>(msg->getTrailer()).to_string()
-                << "], Modified [" << modified_bit << "], Lost[" << lost <<
+                << "], Modified [" << modified_bit << "], Lost[" << (lost?"Yes":"No") <<
                 "], Duplicate[" << duplicate_version << "], Delay [" << delayInterval <<  "]\n";
         output_file << std::flush;
         break;
