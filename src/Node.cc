@@ -126,7 +126,7 @@ void Node::handle_timeout(int frame_seq_num){
          * it will be sent error free
          * */
 
-        sendingTime = getParentModule()->par("PT").doubleValue() + sendingTime;
+        sendingTime += getParentModule()->par("PT").doubleValue();
         // remove the timeout for this frame if any
         stop_timer(frame_info.second->getHeader());
 
@@ -291,36 +291,40 @@ void Node:: apply_error_and_send(std::string error, double sendingOffsetTime, Me
     int delay_interval = 0;
     int duplicate_version = 0;
 
-    double delayTime = sendingOffsetTime + getParentModule()->par("TD").doubleValue();
+    double delayTime = sendingOffsetTime +
+            getParentModule()->par("TD").doubleValue();
+
     switch(error_codes[error])
     {
     case NO_ERRORs:
-        // delayTime = PT + TD
         sendDelayed(msg, delayTime, "out_port");
         break;
     case DUP:
         sendDelayed(msg, delayTime, "out_port");
+        // log the info of the first version of the message
         duplicate_version = 1;
         log_to_file(BEFORE_TRANS, simTime().dbl() + sendingOffsetTime, nodeId, msg, lose_frame,
                     error, modified_bit, duplicate_version, delay_interval);
-
+        // update info of the second version of the message for logging
         duplicate_version = 2;
-        delay_interval += duplicate_frame(delayTime, msg) - delayTime;
+        sendingOffsetTime += duplicate_frame(delayTime, msg) - delayTime;
         break;
     case DELAY:
         delay_interval = delay_frame(delayTime, msg) - delayTime;
-        delayTime = delay_frame(delayTime, msg);
+        delayTime += delay_interval;
         sendDelayed(msg, delayTime, "out_port");
         break;
     case DUP_DELAY:
         delay_interval = delay_frame(delayTime, msg) - delayTime;
-        delayTime = delay_frame(delayTime, msg);
+        delayTime += delay_interval;
         sendDelayed(msg, delayTime, "out_port");
+        // log the info of the first version of the message
         duplicate_version = 1;
         log_to_file(BEFORE_TRANS, simTime().dbl() + sendingOffsetTime, nodeId, msg, lose_frame,
                     error, modified_bit, duplicate_version, delay_interval);
+        // update info of the second version of the message for logging
         duplicate_version = 2;
-        delay_interval += duplicate_frame(delayTime, msg) - delayTime;
+        sendingOffsetTime += duplicate_frame(delayTime, msg) - delayTime;
         break;
     case LOSS:
         lose_frame = true;
@@ -332,30 +336,32 @@ void Node:: apply_error_and_send(std::string error, double sendingOffsetTime, Me
     case MOD_DELAY:
         modified_bit =  modify_frame(delayTime, msg);
         delay_interval = delay_frame(delayTime, msg) - delayTime;
-        delayTime =  delay_frame(delayTime, msg);
+        delayTime += delay_interval;
         sendDelayed(msg, delayTime, "out_port");
         break;
     case MOD_DUP:
         modified_bit =  modify_frame(delayTime, msg);
         sendDelayed(msg, delayTime, "out_port");
+        // log the info of the first version of the message
         duplicate_version = 1;
         log_to_file(BEFORE_TRANS, simTime().dbl() + sendingOffsetTime, nodeId, msg, lose_frame,
                     error, modified_bit, duplicate_version, delay_interval);
-
+        // update info of the second version of the message for logging
         duplicate_version = 2;
-        delay_interval += duplicate_frame(delayTime, msg) - delayTime;
+        sendingOffsetTime += duplicate_frame(delayTime, msg) - delayTime;
         break;
     case MOD_DUP_DELAY:
         modified_bit = modify_frame(delayTime, msg);
         delay_interval = delay_frame(delayTime, msg) - delayTime;
         delayTime = delay_frame(delayTime, msg);
         sendDelayed(msg, delayTime, "out_port");
+        // log the info of the first version of the message
         duplicate_version = 1;
         log_to_file(BEFORE_TRANS, simTime().dbl() + sendingOffsetTime, nodeId, msg, lose_frame,
                     error, modified_bit, duplicate_version, delay_interval);
-
+        // update info of the second version of the message for logging
         duplicate_version = 2;
-        delay_interval += duplicate_frame(delayTime, msg) - delayTime;
+        sendingOffsetTime += duplicate_frame(delayTime, msg) - delayTime;
         break;
     default:
         lose_frame = true;
@@ -372,9 +378,10 @@ void Node::handle_network_layer_ready() {
     std::string payload = message_info.second;
     std::string error = message_info.first;
 
+    double sending_offset_time = getParentModule()->par("PT").doubleValue();
     // send the data
     if(nbuffered < MAX_SEQ)
-        send_data(payload, error);
+        send_data(payload, error, sending_offset_time);
 }
 
 
@@ -515,29 +522,50 @@ void Node::log_to_file(log_info_type info_type, double event_time, char nodeId,
 
     switch(info_type){
     case UPON_READING:
+        // log to the output file
         output_file << "At time[" << event_time << "], Node[" << nodeId <<
         "], Introducing channel error with code =[" << error <<  "]\n";
         output_file << std::flush;
+        // log to the simulation console
+        EV << "At time[" << event_time << "], Node[" << nodeId <<
+                "], Introducing channel error with code =[" << error <<  "]\n";
         break;
     case BEFORE_TRANS:
+        // log to the output file
         output_file << "At time [" << event_time << "], Node["<< nodeId <<
         "] sent frame with seq_num = [" << std::to_string(msg->getHeader())
         << "] and payload = [" << msg->getM_Payload() << "] and trailer =[" << std::bitset<8>(msg->getTrailer()).to_string()
                 << "], Modified [" << modified_bit << "], Lost[" << (lost?"Yes":"No") <<
                 "], Duplicate[" << duplicate_version << "], Delay [" << delayInterval <<  "]\n";
         output_file << std::flush;
+        // log to the simulation console
+        EV << "At time [" << event_time << "], Node["<< nodeId <<
+        "] sent frame with seq_num = [" << std::to_string(msg->getHeader())
+        << "] and payload = [" << msg->getM_Payload() << "] and trailer =[" << std::bitset<8>(msg->getTrailer()).to_string()
+                << "], Modified [" << modified_bit << "], Lost[" << (lost?"Yes":"No") <<
+                "], Duplicate[" << duplicate_version << "], Delay [" << delayInterval <<  "]\n";
         break;
     case TIMEOUT_EVENT:
+        // log to the output file
         output_file << "Time out event at time [" << event_time << "], at Node["
         << nodeId <<"], for frame with seq_num=[" << msg->getHeader() <<"]\n";
+        output_file << std::flush;
+        // log to the simulation console
+        EV << "Time out event at time [" << event_time << "], at Node["
+                << nodeId <<"], for frame with seq_num=[" << msg->getHeader() <<"]\n";
         break;
     case CONTROL_FRAME:
         std::string ack_type = (msg->getFrame_Type() == ACK ? "ACK": "NACK");
         int seq_num = msg->getAck_Num();
+        // log to the output file
         output_file << "At time[" << event_time << "], Node[" << nodeId <<
                     "] sending [" << ack_type << "] with number["
                     << seq_num << "], loss[" << (lost?"Yes":"No")<<"]\n";
         output_file << std::flush;
+        EV << "At time[" << event_time << "], Node[" << nodeId <<
+                    "] sending [" << ack_type << "] with number["
+                    << seq_num << "], loss[" << (lost?"Yes":"No")<<"]\n";
+        // log to the simulation console
         break;
     }
 //    output_file.close();
