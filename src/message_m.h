@@ -19,11 +19,11 @@
 
 
 // cplusplus {{
-	#include <bitset>
-	typedef std::bitset<8> bits;
-	typedef unsigned char Byte;
-	
-	enum Msg_Type { Data, ACK, NACK };
+    #include <bitset>
+    typedef std::bitset<8> bits;
+    typedef unsigned char Byte;
+
+    enum Msg_Type { Data, ACK, NACK };
 // }}
 
 /**
@@ -31,13 +31,13 @@
  * <pre>
  * packet Message
  * {
- *     \@customize(true);  	// see the generated C++ header for more info
+ *     \@customize(true);   // see the generated C++ header for more info
  * 
- *     int Header;			// the data sequence number.
- *     string M_Payload;	// the message contents after byte stuffing (in characters).
- *     Byte Trailer;		// the parity byte.
+ *     int Header;          // the data sequence number.
+ *     string M_Payload;    // the message contents after byte stuffing (in characters).
+ *     Byte Trailer;        // the parity byte.
  *     Msg_Type Frame_Type;// Data=0/ACK=1 /NACK=2.
- *     int Ack_Num;		// ACK/NACK number.
+ *     int Ack_Num;     // ACK/NACK number.
  * }
  * </pre>
  *
@@ -69,7 +69,6 @@ class Message_Base : public ::omnetpp::cPacket
 {
   protected:
     int Header;
-    ::omnetpp::opp_string M_Payload;
     Byte Trailer;
     Msg_Type Frame_Type;
     int Ack_Num;
@@ -80,18 +79,26 @@ class Message_Base : public ::omnetpp::cPacket
   protected:
     // protected and unimplemented operator==(), to prevent accidental usage
     bool operator==(const Message_Base&);
+
+
+  public:
+    ::omnetpp::opp_string M_Payload;
     // make constructors protected to avoid instantiation
+    Message_Base(const char *name=nullptr, short kind=0);
     Message_Base(const Message_Base& other);
     // make assignment operator protected to force the user override it
     Message_Base& operator=(const Message_Base& other);
 
-  public:
-    Message_Base(const char *name=nullptr, short kind=0);
     virtual ~Message_Base();
     virtual Message_Base *dup() const override {
-        return new Message_Base(*this);
-    }
-    virtual void parsimPack(omnetpp::cCommBuffer *b) const override;
+            Message_Base* msgDuplicate = new Message_Base();
+            msgDuplicate->Header = this->getHeader();
+            msgDuplicate->Trailer = this->Trailer;
+            msgDuplicate->Ack_Num = this->Ack_Num;
+            msgDuplicate->Frame_Type = this->Frame_Type;
+            msgDuplicate->M_Payload = this->M_Payload;
+            return msgDuplicate;
+        }    virtual void parsimPack(omnetpp::cCommBuffer *b) const override;
     virtual void parsimUnpack(omnetpp::cCommBuffer *b) override;
 
     // field getter/setter methods
@@ -111,4 +118,3 @@ class Message_Base : public ::omnetpp::cPacket
 
 
 #endif // ifndef __MESSAGE_M_H
-

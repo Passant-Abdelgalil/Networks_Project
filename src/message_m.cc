@@ -481,7 +481,7 @@ std::string MessageDescriptor::getFieldValueAsString(void *object, int field, in
         case 0: return long2string(pp->getHeader());
         case 1: return oppstring2string(pp->getM_Payload());
         case 2: return std::string(1,static_cast<char>(pp->getTrailer()));
-        case 3: {std::stringstream out; out << pp->getFrame_Type(); return out.str();}
+        case 3: return std::string(1,static_cast<char>(pp->getFrame_Type()));
         case 4: return long2string(pp->getAck_Num());
         default: return "";
     }
@@ -534,5 +534,4 @@ void *MessageDescriptor::getFieldStructValuePointer(void *object, int field, int
         default: return nullptr;
     }
 }
-
 
